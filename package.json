@@ -1,6 +1,6 @@
 {
-    "name": "n8n-nodes-mindwtr-file",
-    "version": "26.10.4",
+    "name": "@taistudio/n8n-nodes-mindwtr-file",
+    "version": "26.10.5",
     "description": "n8n community node for managing Mindwtr tasks, projects, and subtasks via JSON file",
     "license": "MIT",
     "publishConfig": {
