@@ -58,17 +58,17 @@ function getParamValue(executeFn: IExecuteFunctions, parameterName: string, i: n
 function getDbFromContext(): IDb {
 	return {
 		tasks: [
-			{ id: 't1', title: 'Call Mom', status: 'inbox' },
-			{ id: 't2', title: 'Process email inbox', status: 'next' },
-			{ id: 't3', title: 'Draft project proposal', status: 'next', projectId: 'p1' },
-			{ id: 't4', title: 'Buy paint samples', status: 'next', projectId: 'p2' },
-			{ id: 't5', title: 'Waiting for design approval', status: 'waiting', projectId: 'p1' },
-			{ id: 't6', title: 'Learn to play guitar', status: 'someday' },
-			{ id: 't7', title: 'Weekly Grocery Run', status: 'next' },
+			{ id: 't1', title: 'Call Mom', status: 'inbox', contexts: ['@home'] },
+			{ id: 't2', title: 'Process email inbox', status: 'next', contexts: ['@work'] },
+			{ id: 't3', title: 'Draft project proposal', status: 'next', projectId: 'p1', contexts: ['@work'] },
+			{ id: 't4', title: 'Buy paint samples', status: 'next', projectId: 'p2', contexts: ['@errands'] },
+			{ id: 't5', title: 'Waiting for design approval', status: 'waiting', projectId: 'p1', contexts: ['@work'] },
+			{ id: 't6', title: 'Learn to play guitar', status: 'someday', contexts: ['@home'] },
+			{ id: 't7', title: 'Weekly Grocery Run', status: 'next', contexts: ['@errands'] },
 		],
 		projects: [
-			{ id: 'p1', title: 'Website Redesign', status: 'active' },
-			{ id: 'p2', title: 'Home Renovation', status: 'active' },
+			{ id: 'p1', title: 'Website Redesign', status: 'active', color: '#3b82f6' },
+			{ id: 'p2', title: 'Home Renovation', status: 'active', color: '#10b981' },
 		],
 		settings: {},
 	};
@@ -789,11 +789,15 @@ export class Mindwtr implements INodeType {
 			async getSubtasks(this: ILoadOptionsFunctions): Promise<INodeListSearchResult> {
 				const db = getDbFromContext();
 				let taskId = '';
-				const rawTaskId = this.getNodeParameter('taskId', 0);
-				if (typeof rawTaskId === 'string') {
-					taskId = rawTaskId;
-				} else if (rawTaskId && typeof rawTaskId === 'object' && 'value' in rawTaskId) {
-					taskId = (rawTaskId as IDataObject).value as string || '';
+				try {
+					const rawTaskId = this.getNodeParameter('taskId', 0);
+					if (typeof rawTaskId === 'string') {
+						taskId = rawTaskId;
+					} else if (rawTaskId && typeof rawTaskId === 'object' && 'value' in rawTaskId) {
+						taskId = (rawTaskId as IDataObject).value as string || '';
+					}
+				} catch {
+					// Ignore if parameter is not available yet
 				}
 
 				const task = db.tasks.find((t) => t.id === taskId);
