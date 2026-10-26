@@ -826,10 +826,6 @@ export class Mindwtr implements INodeType {
 					});
 					continue;
 				}
-				if (error instanceof NodeOperationError) {
-					throw error;
-				}
-				// eslint-disable-next-line @n8n/community-nodes/require-node-api-error
 				throw new NodeOperationError(this.getNode(), error as JsonObject, { itemIndex: i });
 			}
 		}
