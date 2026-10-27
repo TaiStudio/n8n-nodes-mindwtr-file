@@ -45,6 +45,112 @@ interface IDb {
 	settings: IDataObject;
 }
 
+/** Anything in the input file that can be referenced by ID or by name */
+interface INamedEntity {
+	id: string;
+	title: string;
+}
+
+const MAX_LISTED_ENTITIES = 20;
+
+function normalizeName(value: string | undefined): string {
+	return (value ?? '').trim().toLowerCase();
+}
+
+/** Human readable list of entities, used so errors double as a "list" of available names */
+function formatEntityList(entities: INamedEntity[]): string {
+	if (entities.length === 0) {
+		return '(none)';
+	}
+	const shown = entities
+		.slice(0, MAX_LISTED_ENTITIES)
+		.map((entity) => `"${entity.title}" [${entity.id}]`);
+	const remaining = entities.length - MAX_LISTED_ENTITIES;
+	return remaining > 0 ? `${shown.join(', ')} and ${remaining} more` : shown.join(', ');
+}
+
+function findEntityMatches<T extends INamedEntity>(entities: T[], reference: string): T[] {
+	const byId = entities.filter((entity) => entity.id === reference);
+	if (byId.length > 0) {
+		return byId;
+	}
+
+	const name = normalizeName(reference);
+	const byName = entities.filter((entity) => normalizeName(entity.title) === name);
+	if (byName.length > 0) {
+		return byName;
+	}
+
+	return entities.filter((entity) => normalizeName(entity.title).includes(name));
+}
+
+/**
+ * Resolves a reference that can either be an ID or a name taken from the binary file
+ * on input (exact ID, then exact name, then a single name containing the reference).
+ *
+ * Returns `undefined` when the reference is empty, so the caller can fall back to
+ * auto-detection from the input item.
+ */
+function resolveReference<T extends INamedEntity>(
+	ctx: IExecuteFunctions,
+	itemIndex: number,
+	entities: T[],
+	reference: string,
+	entityLabel: string,
+	context = '',
+): T | undefined {
+	const value = (reference ?? '').trim();
+	if (!value) {
+		return undefined;
+	}
+
+	const plural = `${entityLabel}s`;
+	const matches = findEntityMatches(entities, value);
+
+	if (matches.length === 1) {
+		return matches[0];
+	}
+
+	if (matches.length > 1) {
+		throw new NodeOperationError(
+			ctx.getNode(),
+			`${entityLabel} reference "${value}"${context} matches several entries. Matching ${plural}: ${formatEntityList(
+				matches,
+			)}. Use a more specific name or the exact ID.`,
+			{ itemIndex },
+		);
+	}
+
+	throw new NodeOperationError(
+		ctx.getNode(),
+		`${entityLabel} with ID or name "${value}"${context} not found in the input file. Available ${plural}: ${formatEntityList(
+			entities,
+		)}.`,
+		{ itemIndex },
+	);
+}
+
+/** Same as `resolveReference`, but fails when nothing was provided at all */
+function resolveRequired<T extends INamedEntity>(
+	ctx: IExecuteFunctions,
+	itemIndex: number,
+	entities: T[],
+	reference: string,
+	entityLabel: string,
+	context = '',
+): T {
+	const match = resolveReference(ctx, itemIndex, entities, reference, entityLabel, context);
+	if (match) {
+		return match;
+	}
+
+	throw new NodeOperationError(
+		ctx.getNode(),
+		`No ${entityLabel.toLowerCase()} selected${context}: enter its ID or name, or connect an input item that provides one.`,
+		{ itemIndex },
+	);
+}
+
 export class Mindwtr implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Mindwtr',
@@ -231,17 +337,19 @@ export class Mindwtr implements INodeType {
 			// TASK FIELDS
 			// ========================================
 			{
-				displayName: 'Task ID',
+				displayName: 'Task ID or Name',
 				name: 'taskId',
 				type: 'string',
 				default: '',
+				placeholder: 'ID or name',
 				displayOptions: {
 					show: {
 						resource: ['task'],
 						operation: ['update', 'delete', 'validate', 'attach', 'detach'],
 					},
 				},
-				description: 'ID of the target task (auto-detected from input item if left empty)',
+				description:
+					'ID or name of the target task, as found in the file on input. Leave empty to auto-detect it from the input item.',
 			},
 			{
 				displayName: 'Title',
@@ -258,17 +366,19 @@ export class Mindwtr implements INodeType {
 				description: 'Title of the new task',
 			},
 			{
-				displayName: 'Project ID',
+				displayName: 'Project ID or Name',
 				name: 'projectId',
 				type: 'string',
 				default: '',
+				placeholder: 'ID or name',
 				displayOptions: {
 					show: {
 						resource: ['task'],
 						operation: ['attach'],
 					},
 				},
-				description: 'ID of the project to attach the task to (auto-detected from input item if left empty)',
+				description:
+					'ID or name of the project to attach the task to, as found in the file on input. Leave empty to auto-detect it from the input item.',
 			},
 			{
 				displayName: 'Completed',
@@ -327,11 +437,11 @@ export class Mindwtr implements INodeType {
 				},
 				options: [
 					{
-						displayName: 'Project ID',
+						displayName: 'Project ID or Name',
 						name: 'projectId',
 						type: 'string',
 						default: '',
-						description: 'Filter by project ID',
+						description: 'Filter by project ID or name, as found in the file on input',
 					},
 					{
 						displayName: 'Status',
@@ -377,11 +487,11 @@ export class Mindwtr implements INodeType {
 						description: 'Due date of the task',
 					},
 					{
-						displayName: 'Project ID',
+						displayName: 'Project ID or Name',
 						name: 'projectId',
 						type: 'string',
 						default: '',
-						description: 'Project ID to associate with the task',
+						description: 'Project ID or name to associate with the task, as found in the file on input',
 					},
 					{
 						displayName: 'Status',
@@ -434,11 +544,12 @@ export class Mindwtr implements INodeType {
 						description: 'Due date of the task',
 					},
 					{
-						displayName: 'Project ID',
+						displayName: 'Project ID or Name',
 						name: 'projectId',
 						type: 'string',
 						default: '',
-						description: 'Project ID associated with the task',
+						description:
+							'Project ID or name associated with the task, as found in the file on input. Leave empty to detach the task from its project.',
 					},
 					{
 						displayName: 'Status',
@@ -475,17 +586,19 @@ export class Mindwtr implements INodeType {
 			// PROJECT FIELDS
 			// ========================================
 			{
-				displayName: 'Project ID',
+				displayName: 'Project ID or Name',
 				name: 'projectId',
 				type: 'string',
 				default: '',
+				placeholder: 'ID or name',
 				displayOptions: {
 					show: {
 						resource: ['project'],
 						operation: ['update', 'delete'],
 					},
 				},
-				description: 'ID of the target project (auto-detected from input item if left empty)',
+				description:
+					'ID or name of the target project, as found in the file on input. Leave empty to auto-detect it from the input item.',
 			},
 			{
 				displayName: 'Title',
@@ -581,30 +694,34 @@ export class Mindwtr implements INodeType {
 			// SUBTASK FIELDS
 			// ========================================
 			{
-				displayName: 'Task ID',
+				displayName: 'Task ID or Name',
 				name: 'taskId',
 				type: 'string',
 				default: '',
+				placeholder: 'ID or name',
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
 						operation: ['create', 'update', 'delete', 'validate', 'getAll'],
 					},
 				},
-				description: 'ID of the parent task (auto-detected from input item if left empty)',
+				description:
+					'ID or name of the parent task, as found in the file on input. Leave empty to auto-detect it from the input item.',
 			},
 			{
-				displayName: 'Subtask ID',
+				displayName: 'Subtask ID or Name',
 				name: 'subtaskId',
 				type: 'string',
 				default: '',
+				placeholder: 'ID or name',
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
 						operation: ['update', 'delete', 'validate'],
 					},
 				},
-				description: 'ID of the target subtask (auto-detected from input item if left empty)',
+				description:
+					'ID or name of the target subtask, as found in the file on input. Leave empty to auto-detect it from the input item.',
 			},
 			{
 				displayName: 'Title',
@@ -693,7 +810,14 @@ export class Mindwtr implements INodeType {
 							tasks = tasks.filter((t) => t.status === filters.status);
 						}
 						if (filters.projectId) {
-							tasks = tasks.filter((t) => t.projectId === filters.projectId);
+							const project = resolveRequired<IProject>(
+								this,
+								i,
+								db.projects,
+								filters.projectId as string,
+								'Project',
+							);
+							tasks = tasks.filter((t) => t.projectId === project.id);
 						}
 
 						if (!returnAll) {
@@ -725,7 +849,14 @@ export class Mindwtr implements INodeType {
 						};
 
 						if (additionalFields.projectId) {
-							newTask.projectId = additionalFields.projectId as string;
+							const project = resolveRequired<IProject>(
+								this,
+								i,
+								db.projects,
+								additionalFields.projectId as string,
+								'Project',
+							);
+							newTask.projectId = project.id;
 						}
 						if (additionalFields.dueDate) {
 							newTask.dueDate = additionalFields.dueDate as string;
@@ -733,16 +864,14 @@ export class Mindwtr implements INodeType {
 
 						db.tasks.push(newTask);
 					} else if (operation === 'update') {
-						let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
-						if (!taskId) {
-							taskId = (item.json.id as string) || (item.json.taskId as string) || '';
-						}
+						const taskRef =
+							(this.getNodeParameter('taskId', i, '') as string).trim() ||
+							(item.json.id as string) ||
+							(item.json.taskId as string) ||
+							'';
 						const updateFields = this.getNodeParameter('updateFields', i) as IDataObject;
 
-						const task = db.tasks.find((t) => t.id === taskId);
-						if (!task) {
-							throw new NodeOperationError(this.getNode(), `Task with ID "${taskId}" not found`, { itemIndex: i });
-						}
+						const task = resolveRequired<ITask>(this, i, db.tasks, taskRef, 'Task');
 
 						if (updateFields.title) task.title = updateFields.title as string;
 						if (updateFields.status) task.status = updateFields.status as string;
@@ -750,7 +879,14 @@ export class Mindwtr implements INodeType {
 							if (updateFields.projectId === '') {
 								delete task.projectId;
 							} else {
-								task.projectId = updateFields.projectId as string;
+								const project = resolveRequired<IProject>(
+									this,
+									i,
+									db.projects,
+									updateFields.projectId as string,
+									'Project',
+								);
+								task.projectId = project.id;
 							}
 						}
 						if (updateFields.contexts !== undefined) {
@@ -770,61 +906,50 @@ export class Mindwtr implements INodeType {
 						}
 						task.updatedAt = now;
 					} else if (operation === 'delete') {
-						let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
-						if (!taskId) {
-							taskId = (item.json.id as string) || (item.json.taskId as string) || '';
-						}
-						const initialLength = db.tasks.length;
-						db.tasks = db.tasks.filter((t) => t.id !== taskId);
-						if (db.tasks.length === initialLength) {
-							throw new NodeOperationError(this.getNode(), `Task with ID "${taskId}" not found`, { itemIndex: i });
-						}
+						const taskRef =
+							(this.getNodeParameter('taskId', i, '') as string).trim() ||
+							(item.json.id as string) ||
+							(item.json.taskId as string) ||
+							'';
+						const task = resolveRequired<ITask>(this, i, db.tasks, taskRef, 'Task');
+						db.tasks = db.tasks.filter((t) => t.id !== task.id);
 					} else if (operation === 'validate') {
-						let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
-						if (!taskId) {
-							taskId = (item.json.id as string) || (item.json.taskId as string) || '';
-						}
+						const taskRef =
+							(this.getNodeParameter('taskId', i, '') as string).trim() ||
+							(item.json.id as string) ||
+							(item.json.taskId as string) ||
+							'';
 						const completed = this.getNodeParameter('completed', i, true) as boolean;
 
-						const task = db.tasks.find((t) => t.id === taskId);
-						if (!task) {
-							throw new NodeOperationError(this.getNode(), `Task with ID "${taskId}" not found`, { itemIndex: i });
-						}
+						const task = resolveRequired<ITask>(this, i, db.tasks, taskRef, 'Task');
 
 						task.status = completed ? 'completed' : 'inbox';
 						task.updatedAt = now;
 					} else if (operation === 'attach') {
-						let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
-						if (!taskId) {
-							taskId = (item.json.id as string) || (item.json.taskId as string) || '';
-						}
-						let projectId = (this.getNodeParameter('projectId', i, '') as string).trim();
-						if (!projectId) {
-							projectId = (item.json.projectId as string) || (item.json.id as string) || '';
-						}
+						const taskRef =
+							(this.getNodeParameter('taskId', i, '') as string).trim() ||
+							(item.json.id as string) ||
+							(item.json.taskId as string) ||
+							'';
+						const projectRef =
+							(this.getNodeParameter('projectId', i, '') as string).trim() ||
+							(item.json.projectId as string) ||
+							(item.json.id as string) ||
+							'';
 
-						const task = db.tasks.find((t) => t.id === taskId);
-						if (!task) {
-							throw new NodeOperationError(this.getNode(), `Task with ID "${taskId}" not found`, { itemIndex: i });
-						}
+						const task = resolveRequired<ITask>(this, i, db.tasks, taskRef, 'Task');
+						const project = resolveRequired<IProject>(this, i, db.projects, projectRef, 'Project');
 
-						const project = db.projects.find((p) => p.id === projectId);
-						if (!project) {
-							throw new NodeOperationError(this.getNode(), `Project with ID "${projectId}" not found`, { itemIndex: i });
-						}
-
-						task.projectId = projectId;
+						task.projectId = project.id;
 						task.updatedAt = now;
 					} else if (operation === 'detach') {
-						let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
-						if (!taskId) {
-							taskId = (item.json.id as string) || (item.json.taskId as string) || '';
-						}
+						const taskRef =
+							(this.getNodeParameter('taskId', i, '') as string).trim() ||
+							(item.json.id as string) ||
+							(item.json.taskId as string) ||
+							'';
 
-						const task = db.tasks.find((t) => t.id === taskId);
-						if (!task) {
-							throw new NodeOperationError(this.getNode(), `Task with ID "${taskId}" not found`, { itemIndex: i });
-						}
+						const task = resolveRequired<ITask>(this, i, db.tasks, taskRef, 'Task');
 
 						delete task.projectId;
 						task.updatedAt = now;
@@ -845,47 +970,41 @@ export class Mindwtr implements INodeType {
 
 						db.projects.push(newProject);
 					} else if (operation === 'update') {
-						let projectId = (this.getNodeParameter('projectId', i, '') as string).trim();
-						if (!projectId) {
-							projectId = (item.json.id as string) || (item.json.projectId as string) || '';
-						}
+						const projectRef =
+							(this.getNodeParameter('projectId', i, '') as string).trim() ||
+							(item.json.id as string) ||
+							(item.json.projectId as string) ||
+							'';
 						const updateFields = this.getNodeParameter('updateFields', i) as IDataObject;
 
-						const project = db.projects.find((p) => p.id === projectId);
-						if (!project) {
-							throw new NodeOperationError(this.getNode(), `Project with ID "${projectId}" not found`, { itemIndex: i });
-						}
+						const project = resolveRequired<IProject>(this, i, db.projects, projectRef, 'Project');
 
 						if (updateFields.title) project.title = updateFields.title as string;
 						if (updateFields.status) project.status = updateFields.status as string;
 						if (updateFields.color) project.color = updateFields.color as string;
 						project.updatedAt = now;
 					} else if (operation === 'delete') {
-						let projectId = (this.getNodeParameter('projectId', i, '') as string).trim();
-						if (!projectId) {
-							projectId = (item.json.id as string) || (item.json.projectId as string) || '';
-						}
-						const initialLength = db.projects.length;
-						db.projects = db.projects.filter((p) => p.id !== projectId);
-						if (db.projects.length === initialLength) {
-							throw new NodeOperationError(this.getNode(), `Project with ID "${projectId}" not found`, { itemIndex: i });
-						}
+						const projectRef =
+							(this.getNodeParameter('projectId', i, '') as string).trim() ||
+							(item.json.id as string) ||
+							(item.json.projectId as string) ||
+							'';
+						const project = resolveRequired<IProject>(this, i, db.projects, projectRef, 'Project');
+						db.projects = db.projects.filter((p) => p.id !== project.id);
 						for (const task of db.tasks) {
-							if (task.projectId === projectId) {
+							if (task.projectId === project.id) {
 								delete task.projectId;
 								task.updatedAt = now;
 							}
 						}
 					}
 				} else if (resource === 'subtask') {
-					let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
-					if (!taskId) {
-						taskId = (item.json.taskId as string) || (item.json.id as string) || '';
-					}
-					const task = db.tasks.find((t) => t.id === taskId);
-					if (!task) {
-						throw new NodeOperationError(this.getNode(), `Task with ID "${taskId}" not found`, { itemIndex: i });
-					}
+					const taskRef =
+						(this.getNodeParameter('taskId', i, '') as string).trim() ||
+						(item.json.taskId as string) ||
+						(item.json.id as string) ||
+						'';
+					const task = resolveRequired<ITask>(this, i, db.tasks, taskRef, 'Task');
 					task.subtasks = task.subtasks || [];
 
 					if (operation === 'getAll') {
@@ -909,41 +1028,56 @@ export class Mindwtr implements INodeType {
 						task.subtasks.push(newSubtask);
 						task.updatedAt = now;
 					} else if (operation === 'update') {
-						let subtaskId = (this.getNodeParameter('subtaskId', i, '') as string).trim();
-						if (!subtaskId) {
-							subtaskId = (item.json.id as string) || (item.json.subtaskId as string) || '';
-						}
+						const subtaskRef =
+							(this.getNodeParameter('subtaskId', i, '') as string).trim() ||
+							(item.json.id as string) ||
+							(item.json.subtaskId as string) ||
+							'';
 						const title = this.getNodeParameter('title', i) as string;
 
-						const subtask = task.subtasks.find((st) => st.id === subtaskId);
-						if (!subtask) {
-							throw new NodeOperationError(this.getNode(), `Subtask with ID "${subtaskId}" not found in task "${taskId}"`, { itemIndex: i });
-						}
+						const subtask = resolveRequired<ISubtask>(
+							this,
+							i,
+							task.subtasks,
+							subtaskRef,
+							'Subtask',
+							` in task "${task.id}"`,
+						);
 						if (title) subtask.title = title;
 						subtask.updatedAt = now;
 						task.updatedAt = now;
 					} else if (operation === 'delete') {
-						let subtaskId = (this.getNodeParameter('subtaskId', i, '') as string).trim();
-						if (!subtaskId) {
-							subtaskId = (item.json.id as string) || (item.json.subtaskId as string) || '';
-						}
-						const initialLen = task.subtasks.length;
-						task.subtasks = task.subtasks.filter((st) => st.id !== subtaskId);
-						if (task.subtasks.length === initialLen) {
-							throw new NodeOperationError(this.getNode(), `Subtask with ID "${subtaskId}" not found in task "${taskId}"`, { itemIndex: i });
-						}
+						const subtaskRef =
+							(this.getNodeParameter('subtaskId', i, '') as string).trim() ||
+							(item.json.id as string) ||
+							(item.json.subtaskId as string) ||
+							'';
+						const subtask = resolveRequired<ISubtask>(
+							this,
+							i,
+							task.subtasks,
+							subtaskRef,
+							'Subtask',
+							` in task "${task.id}"`,
+						);
+						task.subtasks = task.subtasks.filter((st) => st.id !== subtask.id);
 						task.updatedAt = now;
 					} else if (operation === 'validate') {
-						let subtaskId = (this.getNodeParameter('subtaskId', i, '') as string).trim();
-						if (!subtaskId) {
-							subtaskId = (item.json.id as string) || (item.json.subtaskId as string) || '';
-						}
+						const subtaskRef =
+							(this.getNodeParameter('subtaskId', i, '') as string).trim() ||
+							(item.json.id as string) ||
+							(item.json.subtaskId as string) ||
+							'';
 						const completed = this.getNodeParameter('completed', i, true) as boolean;
 
-						const subtask = task.subtasks.find((st) => st.id === subtaskId);
-						if (!subtask) {
-							throw new NodeOperationError(this.getNode(), `Subtask with ID "${subtaskId}" not found in task "${taskId}"`, { itemIndex: i });
-						}
+						const subtask = resolveRequired<ISubtask>(
+							this,
+							i,
+							task.subtasks,
+							subtaskRef,
+							'Subtask',
+							` in task "${task.id}"`,
+						);
 						subtask.status = completed ? 'completed' : 'needsAction';
 						subtask.updatedAt = now;
 						task.updatedAt = now;
