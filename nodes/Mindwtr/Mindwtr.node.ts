@@ -1,6 +1,3 @@
-import { promises as fs } from 'fs';
-import os from 'os';
-import path from 'path';
 import type {
 	IBinaryData,
 	IDataObject,
@@ -198,65 +195,7 @@ interface IBinaryReference {
 type IListSource = { db: IDb } | { error: string };
 
 const LIST_SOURCE_NOT_SET =
-	'List source is not set on this node. Set the "List Source" parameter below to the default expression (={{ $binary.data }}), then open the list again.';
-
-/** Storage roots n8n may keep binary files in, most specific first */
-function binaryStorageRoots(): string[] {
-	const roots: string[] = [];
-	const explicit = process.env.N8N_BINARY_DATA_STORAGE_PATH ?? process.env.N8N_STORAGE_PATH;
-	if (explicit) {
-		roots.push(explicit);
-	}
-
-	const userFolder = process.env.N8N_USER_FOLDER ?? path.join(os.homedir(), '.n8n');
-	roots.push(path.join(userFolder, 'storage'), path.join(userFolder, 'binaryData'));
-
-	return roots;
-}
-
-/**
- * Translates a binary id (`workflows/<workflowId>/executions/<executionId>/binary_data/<uuid>`)
- * into a file inside n8n's binary storage, refusing anything trying to escape it.
- */
-function binaryIdToPath(root: string, binaryId: string): string | null {
-	if (
-		binaryId === '' ||
-		binaryId.startsWith('/') ||
-		binaryId.startsWith('\\') ||
-		/^[a-zA-Z]:/u.test(binaryId)
-	) {
-		return null;
-	}
-
-	const segments = binaryId.split(/[\\/]/u);
-	const unsafe = segments.some(
-		(segment) =>
-			segment === '' ||
-			segment === '.' ||
-			segment === '..' ||
-			segment.includes(':') ||
-			path.win32.isAbsolute(segment),
-	);
-
-	return unsafe ? null : path.join(root, ...segments);
-}
-
-/** Reads a binary file by its id, trying every storage root n8n may be configured with */
-async function readBinaryFileById(binaryId: string): Promise<Buffer | null> {
-	for (const root of binaryStorageRoots()) {
-		const candidate = binaryIdToPath(root, binaryId);
-		if (candidate === null) {
-			continue;
-		}
-		try {
-			return await fs.readFile(candidate);
-		} catch {
-			// Not stored under that root, keep looking
-		}
-	}
-
-	return null;
-}
+	'No list source available. Set the "List Source" parameter below to the data to list (for example the $json of a node that outputs it), run the workflow once so the editor can resolve it, then open the list again.';
 
 /** Turns the parsed content of the input file into the entities the lists are built from */
 function parseMindwtrDb(raw: unknown): IListSource {
@@ -295,9 +234,10 @@ function parseJsonBuffer(buffer: Buffer): IListSource {
 /**
  * Turns the resolved "List Source" parameter into the entities to list.
  *
- * The editor resolves the parameter before the list is requested, so the value is
- * already the binary reference of the input item. Reading it back needs the file to
- * be stored on the same machine as n8n, which is the default setup.
+ * The editor resolves the parameter before the list is asked for, so the value is
+ * either the data itself or the binary reference of the input item. A binary file
+ * only carries its content when n8n keeps binary data in memory: otherwise the
+ * reference points at a file this node may not read.
  */
 async function resolveListSourceValue(raw: unknown): Promise<IListSource> {
 	if (typeof raw === 'string') {
@@ -306,7 +246,7 @@ async function resolveListSourceValue(raw: unknown): Promise<IListSource> {
 			try {
 				return await resolveListSourceValue(JSON.parse(trimmed));
 			} catch {
-				return { error: 'The input file could not be read as JSON.' };
+				return { error: 'The list source could not be read as JSON.' };
 			}
 		}
 		return { error: LIST_SOURCE_NOT_SET };
@@ -316,45 +256,26 @@ async function resolveListSourceValue(raw: unknown): Promise<IListSource> {
 		return { error: LIST_SOURCE_NOT_SET };
 	}
 
-	if (Array.isArray(raw)) {
+	// The data itself, e.g. when the list source points at the output of another node
+	if (Array.isArray(raw) || 'tasks' in raw || 'projects' in raw) {
 		return parseMindwtrDb(raw);
 	}
 
 	const reference = raw as IBinaryReference;
-	const rawId = typeof reference.id === 'string' ? reference.id.trim() : '';
 	const inlineData = typeof reference.data === 'string' ? reference.data : '';
+	const binaryId = typeof reference.id === 'string' ? reference.id.trim() : '';
 
-	// Ids are prefixed with the storage mode, e.g. `filesystem-v2:workflows/.../binary_data/<uuid>`
-	const separator = rawId.indexOf(':');
-	const mode = separator === -1 ? '' : rawId.slice(0, separator);
-	const fileId = separator === -1 ? rawId : rawId.slice(separator + 1);
-
-	if (mode !== '' && mode !== 'filesystem' && mode !== 'filesystem-v2') {
-		// Only the memory mode keeps the payload next to its id. Every other mode
-		// stores the file where this node has no access to it.
-		if (mode === 'memory' && inlineData !== '') {
-			return parseJsonBuffer(Buffer.from(inlineData, 'base64'));
-		}
-		return {
-			error: `The input file is kept by n8n outside of its file system (mode "${mode}"), so no list can be built from it. Use the default "filesystem" binary data mode, or fill the ID fields by hand.`,
-		};
-	}
-
-	if (fileId !== '') {
-		const buffer = await readBinaryFileById(fileId);
-		if (buffer === null) {
-			return {
-				error: `The input file ("${fileId}") could not be read from n8n's binary storage. Run the workflow once to store it, or fill the ID fields by hand.`,
-			};
-		}
-		return parseJsonBuffer(buffer);
-	}
-
-	if (inlineData !== '') {
+	// Binary data only keeps its content next to its id when held in memory
+	const separator = binaryId.indexOf(':');
+	const mode = separator === -1 ? '' : binaryId.slice(0, separator);
+	if (inlineData !== '' && (mode === '' || mode === 'memory')) {
 		return parseJsonBuffer(Buffer.from(inlineData, 'base64'));
 	}
 
-	return parseMindwtrDb(raw);
+	return {
+		error:
+			'The input file is kept by n8n outside of its memory, which this node may not read. Set "List Source" to an expression giving the data itself (e.g. the $json of a node that outputs it), run n8n with N8N_DEFAULT_BINARY_DATA_MODE=memory, or fill the ID fields by hand.',
+	};
 }
 
 /** Loads the input file once, then serves one page of the matching entries */
@@ -393,6 +314,7 @@ function resourceLocatorModes(searchListMethod: string): INodePropertyMode[] {
 			displayName: 'From List',
 			name: 'list',
 			type: 'list',
+			default: 'undefined',
 			typeOptions: {
 				searchListMethod,
 				searchable: true,
@@ -402,6 +324,7 @@ function resourceLocatorModes(searchListMethod: string): INodePropertyMode[] {
 			displayName: 'ID',
 			name: 'id',
 			type: 'string',
+			default: '',
 			placeholder: 'ID or name',
 		},
 	];
@@ -1025,8 +948,7 @@ export class Mindwtr implements INodeType {
 				name: 'listSource',
 				type: 'string',
 				default: '={{ $binary.data }}',
-				description:
-					'Binary JSON file used to fill the "From list" mode of the ID fields. Defaults to the "data" property of the input item; point it to another binary property if your file is attached under a different name.',
+				description: 'Data used to fill the "From list" mode of the ID fields. Defaults to the binary file on input, which needs n8n to keep binary data in memory (N8N_DEFAULT_BINARY_DATA_MODE=memory); point it at the data itself (for example $JSON) to list from a node that already outputs it.',
 			},
 			{
 				displayName: 'Binary Property',
