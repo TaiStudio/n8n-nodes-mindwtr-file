@@ -1,8 +1,15 @@
+import { promises as fs } from 'fs';
+import os from 'os';
+import path from 'path';
 import type {
 	IBinaryData,
 	IDataObject,
 	IExecuteFunctions,
+	ILoadOptionsFunctions,
 	INodeExecutionData,
+	INodeListSearchItems,
+	INodeListSearchResult,
+	INodePropertyMode,
 	INodeType,
 	INodeTypeDescription,
 	JsonObject,
@@ -151,6 +158,255 @@ function resolveRequired<T extends INamedEntity>(
 	);
 }
 
+// ==========================================================================
+// Resource locator helpers: the ID fields can be filled from a list built
+// out of the binary file present on the input.
+// ==========================================================================
+
+/** A page is small enough for the editor to scroll through without lagging */
+const LIST_PAGE_SIZE = 100;
+
+/**
+ * Accepts whatever an ID field may hold: a resource locator object
+ * (`{ mode, value }`), a plain string, or nothing at all.
+ */
+function toReference(value: unknown): string {
+	if (typeof value === 'string') {
+		return value.trim();
+	}
+	if (typeof value === 'number') {
+		return String(value);
+	}
+	if (value !== null && typeof value === 'object') {
+		const nested = (value as { value?: unknown }).value;
+		if (typeof nested === 'string') {
+			return nested.trim();
+		}
+		if (typeof nested === 'number') {
+			return String(nested);
+		}
+	}
+	return '';
+}
+
+/** Binary reference, as the editor resolves it from an expression such as `={{ $binary.data }}` */
+interface IBinaryReference {
+	data?: unknown;
+	id?: unknown;
+}
+
+type IListSource = { db: IDb } | { error: string };
+
+const LIST_SOURCE_NOT_SET =
+	'List source is not set on this node. Set the "List Source" parameter below to the default expression (={{ $binary.data }}), then open the list again.';
+
+/** Storage roots n8n may keep binary files in, most specific first */
+function binaryStorageRoots(): string[] {
+	const roots: string[] = [];
+	const explicit = process.env.N8N_BINARY_DATA_STORAGE_PATH ?? process.env.N8N_STORAGE_PATH;
+	if (explicit) {
+		roots.push(explicit);
+	}
+
+	const userFolder = process.env.N8N_USER_FOLDER ?? path.join(os.homedir(), '.n8n');
+	roots.push(path.join(userFolder, 'storage'), path.join(userFolder, 'binaryData'));
+
+	return roots;
+}
+
+/**
+ * Translates a binary id (`workflows/<workflowId>/executions/<executionId>/binary_data/<uuid>`)
+ * into a file inside n8n's binary storage, refusing anything trying to escape it.
+ */
+function binaryIdToPath(root: string, binaryId: string): string | null {
+	if (
+		binaryId === '' ||
+		binaryId.startsWith('/') ||
+		binaryId.startsWith('\\') ||
+		/^[a-zA-Z]:/u.test(binaryId)
+	) {
+		return null;
+	}
+
+	const segments = binaryId.split(/[\\/]/u);
+	const unsafe = segments.some(
+		(segment) =>
+			segment === '' ||
+			segment === '.' ||
+			segment === '..' ||
+			segment.includes(':') ||
+			path.win32.isAbsolute(segment),
+	);
+
+	return unsafe ? null : path.join(root, ...segments);
+}
+
+/** Reads a binary file by its id, trying every storage root n8n may be configured with */
+async function readBinaryFileById(binaryId: string): Promise<Buffer | null> {
+	for (const root of binaryStorageRoots()) {
+		const candidate = binaryIdToPath(root, binaryId);
+		if (candidate === null) {
+			continue;
+		}
+		try {
+			return await fs.readFile(candidate);
+		} catch {
+			// Not stored under that root, keep looking
+		}
+	}
+
+	return null;
+}
+
+/** Turns the parsed content of the input file into the entities the lists are built from */
+function parseMindwtrDb(raw: unknown): IListSource {
+	const source = (Array.isArray(raw) ? { tasks: raw } : raw) as Partial<IDb> | null | undefined;
+	const tasks = Array.isArray(source?.tasks) ? (source.tasks as ITask[]) : [];
+	const projects = Array.isArray(source?.projects) ? (source.projects as IProject[]) : [];
+
+	const isNamedEntity = (entity: unknown): entity is INamedEntity =>
+		typeof entity === 'object' &&
+		entity !== null &&
+		typeof (entity as INamedEntity).id === 'string' &&
+		typeof (entity as INamedEntity).title === 'string';
+
+	if (!tasks.every(isNamedEntity) || !projects.every(isNamedEntity)) {
+		return {
+			error:
+				'The input file does not look like a Mindwtr data file: every task and project needs both an "id" and a "title".',
+		};
+	}
+
+	if (tasks.length === 0 && projects.length === 0) {
+		return { error: 'The input file does not contain any task or project.' };
+	}
+
+	return { db: { tasks, projects, settings: {} } };
+}
+
+function parseJsonBuffer(buffer: Buffer): IListSource {
+	try {
+		return parseMindwtrDb(JSON.parse(buffer.toString('utf8')));
+	} catch {
+		return { error: 'The input file could not be read as JSON.' };
+	}
+}
+
+/**
+ * Turns the resolved "List Source" parameter into the entities to list.
+ *
+ * The editor resolves the parameter before the list is requested, so the value is
+ * already the binary reference of the input item. Reading it back needs the file to
+ * be stored on the same machine as n8n, which is the default setup.
+ */
+async function resolveListSourceValue(raw: unknown): Promise<IListSource> {
+	if (typeof raw === 'string') {
+		const trimmed = raw.trim();
+		if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+			try {
+				return await resolveListSourceValue(JSON.parse(trimmed));
+			} catch {
+				return { error: 'The input file could not be read as JSON.' };
+			}
+		}
+		return { error: LIST_SOURCE_NOT_SET };
+	}
+
+	if (raw === null || typeof raw !== 'object') {
+		return { error: LIST_SOURCE_NOT_SET };
+	}
+
+	if (Array.isArray(raw)) {
+		return parseMindwtrDb(raw);
+	}
+
+	const reference = raw as IBinaryReference;
+	const rawId = typeof reference.id === 'string' ? reference.id.trim() : '';
+	const inlineData = typeof reference.data === 'string' ? reference.data : '';
+
+	// Ids are prefixed with the storage mode, e.g. `filesystem-v2:workflows/.../binary_data/<uuid>`
+	const separator = rawId.indexOf(':');
+	const mode = separator === -1 ? '' : rawId.slice(0, separator);
+	const fileId = separator === -1 ? rawId : rawId.slice(separator + 1);
+
+	if (mode !== '' && mode !== 'filesystem' && mode !== 'filesystem-v2') {
+		// Only the memory mode keeps the payload next to its id. Every other mode
+		// stores the file where this node has no access to it.
+		if (mode === 'memory' && inlineData !== '') {
+			return parseJsonBuffer(Buffer.from(inlineData, 'base64'));
+		}
+		return {
+			error: `The input file is kept by n8n outside of its file system (mode "${mode}"), so no list can be built from it. Use the default "filesystem" binary data mode, or fill the ID fields by hand.`,
+		};
+	}
+
+	if (fileId !== '') {
+		const buffer = await readBinaryFileById(fileId);
+		if (buffer === null) {
+			return {
+				error: `The input file ("${fileId}") could not be read from n8n's binary storage. Run the workflow once to store it, or fill the ID fields by hand.`,
+			};
+		}
+		return parseJsonBuffer(buffer);
+	}
+
+	if (inlineData !== '') {
+		return parseJsonBuffer(Buffer.from(inlineData, 'base64'));
+	}
+
+	return parseMindwtrDb(raw);
+}
+
+/** Loads the input file once, then serves one page of the matching entries */
+async function listFromInput(
+	ctx: ILoadOptionsFunctions,
+	filter: string | undefined,
+	paginationToken: string | undefined,
+	buildResults: (db: IDb, query: string) => INodeListSearchItems[],
+): Promise<INodeListSearchResult> {
+	const source = await resolveListSourceValue(ctx.getCurrentNodeParameter('listSource'));
+	if ('error' in source) {
+		return { results: [{ name: `⚠ ${source.error}`, value: '', disabled: true }] };
+	}
+
+	const query = (filter ?? '').trim().toLowerCase();
+	const matching = buildResults(source.db, query);
+
+	const offset = Number.parseInt(paginationToken ?? '', 10) || 0;
+	const page = matching.slice(offset, offset + LIST_PAGE_SIZE);
+
+	return {
+		results: page,
+		paginationToken:
+			offset + page.length < matching.length ? String(offset + page.length) : undefined,
+	};
+}
+
+function filterByQuery<T extends { name: string }>(items: T[], query: string): T[] {
+	return query === '' ? items : items.filter((item) => item.name.toLowerCase().includes(query));
+}
+
+/** Modes of an ID field: picked from the list built out of the input file, or typed in */
+function resourceLocatorModes(searchListMethod: string): INodePropertyMode[] {
+	return [
+		{
+			displayName: 'From List',
+			name: 'list',
+			type: 'list',
+			typeOptions: {
+				searchListMethod,
+				searchable: true,
+			},
+		},
+		{
+			displayName: 'ID',
+			name: 'id',
+			type: 'string',
+			placeholder: 'ID or name',
+		},
+	];
+}
+
 export class Mindwtr implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Mindwtr',
@@ -277,6 +533,12 @@ export class Mindwtr implements INodeType {
 						description: 'Delete an existing project',
 					},
 					{
+						name: 'Get Many',
+						value: 'getAll',
+						action: 'Get many projects',
+						description: 'Retrieve many projects',
+					},
+					{
 						name: 'Update',
 						value: 'update',
 						action: 'Update a project',
@@ -339,9 +601,9 @@ export class Mindwtr implements INodeType {
 			{
 				displayName: 'Task ID or Name',
 				name: 'taskId',
-				type: 'string',
-				default: '',
-				placeholder: 'ID or name',
+				type: 'resourceLocator',
+				default: { mode: 'list', value: '' },
+				modes: resourceLocatorModes('searchTasks'),
 				displayOptions: {
 					show: {
 						resource: ['task'],
@@ -368,9 +630,9 @@ export class Mindwtr implements INodeType {
 			{
 				displayName: 'Project ID or Name',
 				name: 'projectId',
-				type: 'string',
-				default: '',
-				placeholder: 'ID or name',
+				type: 'resourceLocator',
+				default: { mode: 'list', value: '' },
+				modes: resourceLocatorModes('searchProjects'),
 				displayOptions: {
 					show: {
 						resource: ['task'],
@@ -400,7 +662,7 @@ export class Mindwtr implements INodeType {
 				default: true,
 				displayOptions: {
 					show: {
-						resource: ['task'],
+						resource: ['task', 'project'],
 						operation: ['getAll'],
 					},
 				},
@@ -416,7 +678,7 @@ export class Mindwtr implements INodeType {
 				default: 50,
 				displayOptions: {
 					show: {
-						resource: ['task'],
+						resource: ['task', 'project'],
 						operation: ['getAll'],
 						returnAll: [false],
 					},
@@ -439,8 +701,9 @@ export class Mindwtr implements INodeType {
 					{
 						displayName: 'Project ID or Name',
 						name: 'projectId',
-						type: 'string',
-						default: '',
+						type: 'resourceLocator',
+						default: { mode: 'list', value: '' },
+						modes: resourceLocatorModes('searchProjects'),
 						description: 'Filter by project ID or name, as found in the file on input',
 					},
 					{
@@ -489,9 +752,11 @@ export class Mindwtr implements INodeType {
 					{
 						displayName: 'Project ID or Name',
 						name: 'projectId',
-						type: 'string',
-						default: '',
-						description: 'Project ID or name to associate with the task, as found in the file on input',
+						type: 'resourceLocator',
+						default: { mode: 'list', value: '' },
+						modes: resourceLocatorModes('searchProjects'),
+						description:
+							'Project ID or name to associate with the task, as found in the file on input',
 					},
 					{
 						displayName: 'Status',
@@ -546,8 +811,9 @@ export class Mindwtr implements INodeType {
 					{
 						displayName: 'Project ID or Name',
 						name: 'projectId',
-						type: 'string',
-						default: '',
+						type: 'resourceLocator',
+						default: { mode: 'list', value: '' },
+						modes: resourceLocatorModes('searchProjects'),
 						description:
 							'Project ID or name associated with the task, as found in the file on input. Leave empty to detach the task from its project.',
 					},
@@ -588,9 +854,9 @@ export class Mindwtr implements INodeType {
 			{
 				displayName: 'Project ID or Name',
 				name: 'projectId',
-				type: 'string',
-				default: '',
-				placeholder: 'ID or name',
+				type: 'resourceLocator',
+				default: { mode: 'list', value: '' },
+				modes: resourceLocatorModes('searchProjects'),
 				displayOptions: {
 					show: {
 						resource: ['project'],
@@ -696,9 +962,9 @@ export class Mindwtr implements INodeType {
 			{
 				displayName: 'Task ID or Name',
 				name: 'taskId',
-				type: 'string',
-				default: '',
-				placeholder: 'ID or name',
+				type: 'resourceLocator',
+				default: { mode: 'list', value: '' },
+				modes: resourceLocatorModes('searchTasks'),
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
@@ -711,9 +977,9 @@ export class Mindwtr implements INodeType {
 			{
 				displayName: 'Subtask ID or Name',
 				name: 'subtaskId',
-				type: 'string',
-				default: '',
-				placeholder: 'ID or name',
+				type: 'resourceLocator',
+				default: { mode: 'list', value: '' },
+				modes: resourceLocatorModes('searchSubtasks'),
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
@@ -755,6 +1021,14 @@ export class Mindwtr implements INodeType {
 			// OPTIONS / FILE
 			// ========================================
 			{
+				displayName: 'List Source',
+				name: 'listSource',
+				type: 'string',
+				default: '={{ $binary.data }}',
+				description:
+					'Binary JSON file used to fill the "From list" mode of the ID fields. Defaults to the "data" property of the input item; point it to another binary property if your file is attached under a different name.',
+			},
+			{
 				displayName: 'Binary Property',
 				name: 'binaryPropertyName',
 				type: 'string',
@@ -762,6 +1036,73 @@ export class Mindwtr implements INodeType {
 				description: 'Name of the binary property containing the JSON file',
 			},
 		],
+	};
+
+	methods = {
+		listSearch: {
+			async searchTasks(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+				paginationToken?: string,
+			): Promise<INodeListSearchResult> {
+				return await listFromInput(this, filter, paginationToken, (db, query) =>
+					filterByQuery(
+						db.tasks.map((task) => ({
+							name: `${task.title} [${task.id}] (${task.status})`,
+							value: task.id,
+						})),
+						query,
+					),
+				);
+			},
+			async searchProjects(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+				paginationToken?: string,
+			): Promise<INodeListSearchResult> {
+				return await listFromInput(this, filter, paginationToken, (db, query) =>
+					filterByQuery(
+						db.projects.map((project) => ({
+							name: `${project.title} [${project.id}] (${project.status})`,
+							value: project.id,
+						})),
+						query,
+					),
+				);
+			},
+			async searchSubtasks(
+				this: ILoadOptionsFunctions,
+				filter?: string,
+				paginationToken?: string,
+			): Promise<INodeListSearchResult> {
+				// Subtasks of the selected task when there is one, every subtask otherwise
+				const parentReference = toReference(this.getCurrentNodeParameter('taskId'));
+
+				return await listFromInput(this, filter, paginationToken, (db, query) => {
+					const parents =
+						parentReference === '' ? db.tasks : findEntityMatches(db.tasks, parentReference);
+
+					if (parents.length === 0) {
+						return [
+							{
+								name: `⚠ Task reference "${parentReference}" was not found in the input file.`,
+								value: '',
+								disabled: true,
+							},
+						];
+					}
+
+					const subtasks = parents.flatMap((task) =>
+						(task.subtasks ?? []).map((subtask) => ({
+							name: `${task.title} > ${subtask.title} [${subtask.id}]`,
+							value: subtask.id,
+						})),
+					);
+
+					return filterByQuery(subtasks, query);
+				});
+			},
+		},
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
@@ -809,12 +1150,13 @@ export class Mindwtr implements INodeType {
 						if (filters.status) {
 							tasks = tasks.filter((t) => t.status === filters.status);
 						}
-						if (filters.projectId) {
+						const filterProjectRef = toReference(filters.projectId);
+						if (filterProjectRef) {
 							const project = resolveRequired<IProject>(
 								this,
 								i,
 								db.projects,
-								filters.projectId as string,
+								filterProjectRef,
 								'Project',
 							);
 							tasks = tasks.filter((t) => t.projectId === project.id);
@@ -848,12 +1190,13 @@ export class Mindwtr implements INodeType {
 							updatedAt: now,
 						};
 
-						if (additionalFields.projectId) {
+						const additionalProjectRef = toReference(additionalFields.projectId);
+						if (additionalProjectRef) {
 							const project = resolveRequired<IProject>(
 								this,
 								i,
 								db.projects,
-								additionalFields.projectId as string,
+								additionalProjectRef,
 								'Project',
 							);
 							newTask.projectId = project.id;
@@ -865,7 +1208,7 @@ export class Mindwtr implements INodeType {
 						db.tasks.push(newTask);
 					} else if (operation === 'update') {
 						const taskRef =
-							(this.getNodeParameter('taskId', i, '') as string).trim() ||
+							toReference(this.getNodeParameter('taskId', i, '')) ||
 							(item.json.id as string) ||
 							(item.json.taskId as string) ||
 							'';
@@ -876,14 +1219,15 @@ export class Mindwtr implements INodeType {
 						if (updateFields.title) task.title = updateFields.title as string;
 						if (updateFields.status) task.status = updateFields.status as string;
 						if (updateFields.projectId !== undefined) {
-							if (updateFields.projectId === '') {
+							const updateProjectRef = toReference(updateFields.projectId);
+							if (updateProjectRef === '') {
 								delete task.projectId;
 							} else {
 								const project = resolveRequired<IProject>(
 									this,
 									i,
 									db.projects,
-									updateFields.projectId as string,
+									updateProjectRef,
 									'Project',
 								);
 								task.projectId = project.id;
@@ -907,7 +1251,7 @@ export class Mindwtr implements INodeType {
 						task.updatedAt = now;
 					} else if (operation === 'delete') {
 						const taskRef =
-							(this.getNodeParameter('taskId', i, '') as string).trim() ||
+							toReference(this.getNodeParameter('taskId', i, '')) ||
 							(item.json.id as string) ||
 							(item.json.taskId as string) ||
 							'';
@@ -915,7 +1259,7 @@ export class Mindwtr implements INodeType {
 						db.tasks = db.tasks.filter((t) => t.id !== task.id);
 					} else if (operation === 'validate') {
 						const taskRef =
-							(this.getNodeParameter('taskId', i, '') as string).trim() ||
+							toReference(this.getNodeParameter('taskId', i, '')) ||
 							(item.json.id as string) ||
 							(item.json.taskId as string) ||
 							'';
@@ -927,12 +1271,12 @@ export class Mindwtr implements INodeType {
 						task.updatedAt = now;
 					} else if (operation === 'attach') {
 						const taskRef =
-							(this.getNodeParameter('taskId', i, '') as string).trim() ||
+							toReference(this.getNodeParameter('taskId', i, '')) ||
 							(item.json.id as string) ||
 							(item.json.taskId as string) ||
 							'';
 						const projectRef =
-							(this.getNodeParameter('projectId', i, '') as string).trim() ||
+							toReference(this.getNodeParameter('projectId', i, '')) ||
 							(item.json.projectId as string) ||
 							(item.json.id as string) ||
 							'';
@@ -944,7 +1288,7 @@ export class Mindwtr implements INodeType {
 						task.updatedAt = now;
 					} else if (operation === 'detach') {
 						const taskRef =
-							(this.getNodeParameter('taskId', i, '') as string).trim() ||
+							toReference(this.getNodeParameter('taskId', i, '')) ||
 							(item.json.id as string) ||
 							(item.json.taskId as string) ||
 							'';
@@ -955,7 +1299,23 @@ export class Mindwtr implements INodeType {
 						task.updatedAt = now;
 					}
 				} else if (resource === 'project') {
-					if (operation === 'create') {
+					if (operation === 'getAll') {
+						const returnAll = this.getNodeParameter('returnAll', i) as boolean;
+						const limit = this.getNodeParameter('limit', i, 50) as number;
+
+						let projects = db.projects;
+						if (!returnAll) {
+							projects = projects.slice(0, limit);
+						}
+
+						for (const project of projects) {
+							returnData.push({
+								json: project as unknown as IDataObject,
+								pairedItem: { item: i },
+							});
+						}
+						continue;
+					} else if (operation === 'create') {
 						const title = this.getNodeParameter('title', i) as string;
 						const additionalFields = this.getNodeParameter('additionalFields', i) as IDataObject;
 
@@ -971,7 +1331,7 @@ export class Mindwtr implements INodeType {
 						db.projects.push(newProject);
 					} else if (operation === 'update') {
 						const projectRef =
-							(this.getNodeParameter('projectId', i, '') as string).trim() ||
+							toReference(this.getNodeParameter('projectId', i, '')) ||
 							(item.json.id as string) ||
 							(item.json.projectId as string) ||
 							'';
@@ -985,7 +1345,7 @@ export class Mindwtr implements INodeType {
 						project.updatedAt = now;
 					} else if (operation === 'delete') {
 						const projectRef =
-							(this.getNodeParameter('projectId', i, '') as string).trim() ||
+							toReference(this.getNodeParameter('projectId', i, '')) ||
 							(item.json.id as string) ||
 							(item.json.projectId as string) ||
 							'';
@@ -1000,7 +1360,7 @@ export class Mindwtr implements INodeType {
 					}
 				} else if (resource === 'subtask') {
 					const taskRef =
-						(this.getNodeParameter('taskId', i, '') as string).trim() ||
+						toReference(this.getNodeParameter('taskId', i, '')) ||
 						(item.json.taskId as string) ||
 						(item.json.id as string) ||
 						'';
@@ -1029,7 +1389,7 @@ export class Mindwtr implements INodeType {
 						task.updatedAt = now;
 					} else if (operation === 'update') {
 						const subtaskRef =
-							(this.getNodeParameter('subtaskId', i, '') as string).trim() ||
+							toReference(this.getNodeParameter('subtaskId', i, '')) ||
 							(item.json.id as string) ||
 							(item.json.subtaskId as string) ||
 							'';
@@ -1048,7 +1408,7 @@ export class Mindwtr implements INodeType {
 						task.updatedAt = now;
 					} else if (operation === 'delete') {
 						const subtaskRef =
-							(this.getNodeParameter('subtaskId', i, '') as string).trim() ||
+							toReference(this.getNodeParameter('subtaskId', i, '')) ||
 							(item.json.id as string) ||
 							(item.json.subtaskId as string) ||
 							'';
@@ -1064,7 +1424,7 @@ export class Mindwtr implements INodeType {
 						task.updatedAt = now;
 					} else if (operation === 'validate') {
 						const subtaskRef =
-							(this.getNodeParameter('subtaskId', i, '') as string).trim() ||
+							toReference(this.getNodeParameter('subtaskId', i, '')) ||
 							(item.json.id as string) ||
 							(item.json.subtaskId as string) ||
 							'';
