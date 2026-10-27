@@ -241,7 +241,7 @@ export class Mindwtr implements INodeType {
 						operation: ['update', 'delete', 'validate', 'attach', 'detach'],
 					},
 				},
-				description: 'ID of the target task',
+				description: 'ID of the target task (supports expressions from input file)',
 			},
 			{
 				displayName: 'Title',

@@ -1,46 +1,74 @@
 # n8n-nodes-mindwtr-file
 
-This is an n8n community node. It lets you use _app/service name_ in your n8n workflows.
-
-_App/service name_ is _one or two sentences describing the service this node integrates with_.
+This is an n8n community node package that allows you to manage **Mindwtr** tasks, projects, and subtasks directly within your n8n workflows using a JSON database file.
 
 [n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
 
-[Installation](#installation)
-[Operations](#operations)
-[Credentials](#credentials)
-[Compatibility](#compatibility)
-[Usage](#usage)
-[Resources](#resources)
-[Version history](#version-history)
+---
+
+## Features
+
+Manage your structured Mindwtr JSON database file across three main resources:
+
+- **Task**: Create, update, delete, retrieve, validate (complete), attach to project, and detach from project.
+- **Project**: Create, update, and delete projects (with status and color support).
+- **Subtask**: Create, update, delete, retrieve, and validate subtasks within specific tasks.
 
 ## Installation
 
-Follow the [installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) in the n8n community nodes documentation.
+Follow the [official installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) for n8n community nodes:
 
-## Operations
+1. Go to **Settings > Community Nodes** in your n8n instance.
+2. Select **Install**.
+3. Enter `@taistudio/n8n-nodes-mindwtr-file` into the npm package name field.
+4. Accept the risk disclaimer and click **Install**.
 
-_List the operations supported by your node._
+## How It Works
+
+The Mindwtr node operates on a JSON file passed via an n8n binary property (default: `data`). 
+1. Read a JSON file (e.g. from disk, S3, or HTTP) into binary data.
+2. Pass it through the Mindwtr node to perform operations (create task, update project, validate subtask, etc.).
+3. The node updates the JSON database structure and outputs both the updated JSON object and the updated file as binary data for subsequent nodes in your workflow.
+
+## Operations & Parameters
+
+### 1. Task
+- **Create**: Add a new task with title, status, contexts, tags, due date, and optional project ID.
+- **Update**: Modify task title, status, project association, contexts, tags, or due date.
+- **Delete**: Remove a task by its ID.
+- **Get Many**: Retrieve tasks with filtering options (by status or project ID) and limit controls.
+- **Validate**: Mark a task as completed or incomplete.
+- **Attach to Project**: Assign a task to an existing project.
+- **Detach From Project**: Remove project association from a task.
+
+### 2. Project
+- **Create**: Add a new project with title, status, and hex color code.
+- **Update**: Modify project title, status, or color.
+- **Delete**: Remove a project by its ID (and unassign any associated tasks).
+
+### 3. Subtask
+- **Create**: Add a subtask to a specific task.
+- **Update**: Modify subtask title.
+- **Delete**: Remove a subtask by ID.
+- **Get Many**: Retrieve all subtasks for a given task.
+- **Validate**: Mark a subtask as completed or incomplete.
 
 ## Credentials
 
-_If users need to authenticate with the app/service, provide details here. You should include prerequisites (such as signing up with the service), available authentication methods, and how to set them up._
+This node does not require external API credentials, as it processes local or workflow-provided JSON files directly.
 
 ## Compatibility
 
-_State the minimum n8n version, as well as which versions you test against. You can also include any known version incompatibility issues._
-
-## Usage
-
-_This is an optional section. Use it to help users with any difficult or confusing aspects of the node._
-
-_By the time users are looking for community nodes, they probably already know n8n basics. But if you expect new users, you can link to the [Try it out](https://docs.n8n.io/try-it-out/) documentation to help them get started._
+- **n8n version**: v1.0.0 or higher
+- **Node API Version**: 1
+- **Strict Mode**: Enabled
 
 ## Resources
 
-* [n8n community nodes documentation](https://docs.n8n.io/integrations/#community-nodes)
-* _Link to app/service documentation._
+- [n8n community nodes documentation](https://docs.n8n.io/integrations/#community-nodes)
+- [GitHub Repository](https://github.com/TaiStudio/n8n-nodes-mindwtr-file)
+- [Issue Tracker](https://github.com/TaiStudio/n8n-nodes-mindwtr-file/issues)
 
-## Version history
+## License
 
-_This is another optional section. If your node has multiple versions, include a short description of available versions and what changed, as well as any compatibility impact._
+[MIT License](LICENSE) © Tai Studio
