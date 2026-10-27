@@ -1,9 +1,7 @@
 import type {
 	IDataObject,
 	IExecuteFunctions,
-	ILoadOptionsFunctions,
 	INodeExecutionData,
-	INodeListSearchResult,
 	INodeType,
 	INodeTypeDescription,
 	JsonObject,
@@ -44,34 +42,6 @@ interface IDb {
 	tasks: ITask[];
 	projects: IProject[];
 	settings: IDataObject;
-}
-
-function getParamValue(executeFn: IExecuteFunctions, parameterName: string, i: number): string {
-	const raw = executeFn.getNodeParameter(parameterName, i);
-	if (typeof raw === 'string') return raw;
-	if (raw && typeof raw === 'object' && 'value' in raw) {
-		return (raw as IDataObject).value as string || '';
-	}
-	return '';
-}
-
-function getDbFromContext(): IDb {
-	return {
-		tasks: [
-			{ id: 't1', title: 'Call Mom', status: 'inbox', contexts: ['@home'] },
-			{ id: 't2', title: 'Process email inbox', status: 'next', contexts: ['@work'] },
-			{ id: 't3', title: 'Draft project proposal', status: 'next', projectId: 'p1', contexts: ['@work'] },
-			{ id: 't4', title: 'Buy paint samples', status: 'next', projectId: 'p2', contexts: ['@errands'] },
-			{ id: 't5', title: 'Waiting for design approval', status: 'waiting', projectId: 'p1', contexts: ['@work'] },
-			{ id: 't6', title: 'Learn to play guitar', status: 'someday', contexts: ['@home'] },
-			{ id: 't7', title: 'Weekly Grocery Run', status: 'next', contexts: ['@errands'] },
-		],
-		projects: [
-			{ id: 'p1', title: 'Website Redesign', status: 'active', color: '#3b82f6' },
-			{ id: 'p2', title: 'Home Renovation', status: 'active', color: '#10b981' },
-		],
-		settings: {},
-	};
 }
 
 export class Mindwtr implements INodeType {
@@ -260,35 +230,18 @@ export class Mindwtr implements INodeType {
 			// TASK FIELDS
 			// ========================================
 			{
-				displayName: 'Task',
+				displayName: 'Task ID',
 				name: 'taskId',
-				type: 'resourceLocator',
-				default: { mode: 'list', value: '' },
+				type: 'string',
 				required: true,
+				default: '',
 				displayOptions: {
 					show: {
 						resource: ['task'],
 						operation: ['update', 'delete', 'validate', 'attach', 'detach'],
 					},
 				},
-				description: 'Select or enter the target task',
-				modes: [
-					{
-						displayName: 'From List',
-						name: 'list',
-						type: 'list',
-						typeOptions: {
-							searchListMethod: 'getTasks',
-							searchable: true,
-						},
-					},
-					{
-						displayName: 'ID',
-						name: 'id',
-						type: 'string',
-						placeholder: 't1',
-					},
-				],
+				description: 'ID of the target task',
 			},
 			{
 				displayName: 'Title',
@@ -305,35 +258,18 @@ export class Mindwtr implements INodeType {
 				description: 'Title of the new task',
 			},
 			{
-				displayName: 'Project',
+				displayName: 'Project ID',
 				name: 'projectId',
-				type: 'resourceLocator',
-				default: { mode: 'list', value: '' },
+				type: 'string',
 				required: true,
+				default: '',
 				displayOptions: {
 					show: {
 						resource: ['task'],
 						operation: ['attach'],
 					},
 				},
-				description: 'The project to attach the task to',
-				modes: [
-					{
-						displayName: 'From List',
-						name: 'list',
-						type: 'list',
-						typeOptions: {
-							searchListMethod: 'getProjects',
-							searchable: true,
-						},
-					},
-					{
-						displayName: 'ID',
-						name: 'id',
-						type: 'string',
-						placeholder: 'p1',
-					},
-				],
+				description: 'ID of the project to attach the task to',
 			},
 			{
 				displayName: 'Completed',
@@ -540,35 +476,18 @@ export class Mindwtr implements INodeType {
 			// PROJECT FIELDS
 			// ========================================
 			{
-				displayName: 'Project',
+				displayName: 'Project ID',
 				name: 'projectId',
-				type: 'resourceLocator',
-				default: { mode: 'list', value: '' },
+				type: 'string',
 				required: true,
+				default: '',
 				displayOptions: {
 					show: {
 						resource: ['project'],
 						operation: ['update', 'delete'],
 					},
 				},
-				description: 'Select or enter the target project',
-				modes: [
-					{
-						displayName: 'From List',
-						name: 'list',
-						type: 'list',
-						typeOptions: {
-							searchListMethod: 'getProjects',
-							searchable: true,
-						},
-					},
-					{
-						displayName: 'ID',
-						name: 'id',
-						type: 'string',
-						placeholder: 'p1',
-					},
-				],
+				description: 'ID of the target project',
 			},
 			{
 				displayName: 'Title',
@@ -664,66 +583,32 @@ export class Mindwtr implements INodeType {
 			// SUBTASK FIELDS
 			// ========================================
 			{
-				displayName: 'Task',
+				displayName: 'Task ID',
 				name: 'taskId',
-				type: 'resourceLocator',
-				default: { mode: 'list', value: '' },
+				type: 'string',
 				required: true,
+				default: '',
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
 						operation: ['create', 'update', 'delete', 'validate', 'getAll'],
 					},
 				},
-				description: 'Select or enter the parent task',
-				modes: [
-					{
-						displayName: 'From List',
-						name: 'list',
-						type: 'list',
-						typeOptions: {
-							searchListMethod: 'getTasks',
-							searchable: true,
-						},
-					},
-					{
-						displayName: 'ID',
-						name: 'id',
-						type: 'string',
-						placeholder: 't1',
-					},
-				],
+				description: 'ID of the parent task',
 			},
 			{
-				displayName: 'Subtask',
+				displayName: 'Subtask ID',
 				name: 'subtaskId',
-				type: 'resourceLocator',
-				default: { mode: 'list', value: '' },
+				type: 'string',
 				required: true,
+				default: '',
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
 						operation: ['update', 'delete', 'validate'],
 					},
 				},
-				description: 'Select or enter the target subtask',
-				modes: [
-					{
-						displayName: 'From List',
-						name: 'list',
-						type: 'list',
-						typeOptions: {
-							searchListMethod: 'getSubtasks',
-							searchable: true,
-						},
-					},
-					{
-						displayName: 'ID',
-						name: 'id',
-						type: 'string',
-						placeholder: 'st1',
-					},
-				],
+				description: 'ID of the target subtask',
 			},
 			{
 				displayName: 'Title',
@@ -764,52 +649,6 @@ export class Mindwtr implements INodeType {
 				description: 'Name of the binary property containing the JSON file',
 			},
 		],
-	};
-
-	methods = {
-		listSearch: {
-			async getProjects(this: ILoadOptionsFunctions): Promise<INodeListSearchResult> {
-				const db = getDbFromContext();
-				return {
-					results: db.projects.map((p) => ({
-						name: `${p.title} (${p.id})`,
-						value: p.id,
-					})),
-				};
-			},
-			async getTasks(this: ILoadOptionsFunctions): Promise<INodeListSearchResult> {
-				const db = getDbFromContext();
-				return {
-					results: db.tasks.map((t) => ({
-						name: `${t.title} (${t.id}) - [${t.status}]`,
-						value: t.id,
-					})),
-				};
-			},
-			async getSubtasks(this: ILoadOptionsFunctions): Promise<INodeListSearchResult> {
-				const db = getDbFromContext();
-				let taskId = '';
-				try {
-					const rawTaskId = this.getNodeParameter('taskId', 0);
-					if (typeof rawTaskId === 'string') {
-						taskId = rawTaskId;
-					} else if (rawTaskId && typeof rawTaskId === 'object' && 'value' in rawTaskId) {
-						taskId = (rawTaskId as IDataObject).value as string || '';
-					}
-				} catch {
-					// Ignore if parameter is not available yet
-				}
-
-				const task = db.tasks.find((t) => t.id === taskId);
-				const subtasks = task?.subtasks || [];
-				return {
-					results: subtasks.map((st) => ({
-						name: `${st.title} (${st.id})`,
-						value: st.id,
-					})),
-				};
-			},
-		},
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
@@ -894,7 +733,7 @@ export class Mindwtr implements INodeType {
 
 						db.tasks.push(newTask);
 					} else if (operation === 'update') {
-						const taskId = getParamValue(this, 'taskId', i);
+						const taskId = this.getNodeParameter('taskId', i) as string;
 						const updateFields = this.getNodeParameter('updateFields', i) as IDataObject;
 
 						const task = db.tasks.find((t) => t.id === taskId);
@@ -928,14 +767,14 @@ export class Mindwtr implements INodeType {
 						}
 						task.updatedAt = now;
 					} else if (operation === 'delete') {
-						const taskId = getParamValue(this, 'taskId', i);
+						const taskId = this.getNodeParameter('taskId', i) as string;
 						const initialLength = db.tasks.length;
 						db.tasks = db.tasks.filter((t) => t.id !== taskId);
 						if (db.tasks.length === initialLength) {
 							throw new NodeOperationError(this.getNode(), `Task with ID "${taskId}" not found`, { itemIndex: i });
 						}
 					} else if (operation === 'validate') {
-						const taskId = getParamValue(this, 'taskId', i);
+						const taskId = this.getNodeParameter('taskId', i) as string;
 						const completed = this.getNodeParameter('completed', i, true) as boolean;
 
 						const task = db.tasks.find((t) => t.id === taskId);
@@ -946,8 +785,8 @@ export class Mindwtr implements INodeType {
 						task.status = completed ? 'completed' : 'inbox';
 						task.updatedAt = now;
 					} else if (operation === 'attach') {
-						const taskId = getParamValue(this, 'taskId', i);
-						const projectId = getParamValue(this, 'projectId', i);
+						const taskId = this.getNodeParameter('taskId', i) as string;
+						const projectId = this.getNodeParameter('projectId', i) as string;
 
 						const task = db.tasks.find((t) => t.id === taskId);
 						if (!task) {
@@ -962,7 +801,7 @@ export class Mindwtr implements INodeType {
 						task.projectId = projectId;
 						task.updatedAt = now;
 					} else if (operation === 'detach') {
-						const taskId = getParamValue(this, 'taskId', i);
+						const taskId = this.getNodeParameter('taskId', i) as string;
 
 						const task = db.tasks.find((t) => t.id === taskId);
 						if (!task) {
@@ -988,7 +827,7 @@ export class Mindwtr implements INodeType {
 
 						db.projects.push(newProject);
 					} else if (operation === 'update') {
-						const projectId = getParamValue(this, 'projectId', i);
+						const projectId = this.getNodeParameter('projectId', i) as string;
 						const updateFields = this.getNodeParameter('updateFields', i) as IDataObject;
 
 						const project = db.projects.find((p) => p.id === projectId);
@@ -1001,7 +840,7 @@ export class Mindwtr implements INodeType {
 						if (updateFields.color) project.color = updateFields.color as string;
 						project.updatedAt = now;
 					} else if (operation === 'delete') {
-						const projectId = getParamValue(this, 'projectId', i);
+						const projectId = this.getNodeParameter('projectId', i) as string;
 						const initialLength = db.projects.length;
 						db.projects = db.projects.filter((p) => p.id !== projectId);
 						if (db.projects.length === initialLength) {
@@ -1015,7 +854,7 @@ export class Mindwtr implements INodeType {
 						}
 					}
 				} else if (resource === 'subtask') {
-					const taskId = getParamValue(this, 'taskId', i);
+					const taskId = this.getNodeParameter('taskId', i) as string;
 					const task = db.tasks.find((t) => t.id === taskId);
 					if (!task) {
 						throw new NodeOperationError(this.getNode(), `Task with ID "${taskId}" not found`, { itemIndex: i });
@@ -1043,7 +882,7 @@ export class Mindwtr implements INodeType {
 						task.subtasks.push(newSubtask);
 						task.updatedAt = now;
 					} else if (operation === 'update') {
-						const subtaskId = getParamValue(this, 'subtaskId', i);
+						const subtaskId = this.getNodeParameter('subtaskId', i) as string;
 						const title = this.getNodeParameter('title', i) as string;
 
 						const subtask = task.subtasks.find((st) => st.id === subtaskId);
@@ -1054,7 +893,7 @@ export class Mindwtr implements INodeType {
 						subtask.updatedAt = now;
 						task.updatedAt = now;
 					} else if (operation === 'delete') {
-						const subtaskId = getParamValue(this, 'subtaskId', i);
+						const subtaskId = this.getNodeParameter('subtaskId', i) as string;
 						const initialLen = task.subtasks.length;
 						task.subtasks = task.subtasks.filter((st) => st.id !== subtaskId);
 						if (task.subtasks.length === initialLen) {
@@ -1062,7 +901,7 @@ export class Mindwtr implements INodeType {
 						}
 						task.updatedAt = now;
 					} else if (operation === 'validate') {
-						const subtaskId = getParamValue(this, 'subtaskId', i);
+						const subtaskId = this.getNodeParameter('subtaskId', i) as string;
 						const completed = this.getNodeParameter('completed', i, true) as boolean;
 
 						const subtask = task.subtasks.find((st) => st.id === subtaskId);
