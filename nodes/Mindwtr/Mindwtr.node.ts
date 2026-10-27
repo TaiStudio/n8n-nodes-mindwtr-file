@@ -1,19 +1,13 @@
 import type {
+	IBinaryData,
 	IDataObject,
 	IExecuteFunctions,
-	ILoadOptionsFunctions,
 	INodeExecutionData,
-	INodePropertyOptions,
 	INodeType,
 	INodeTypeDescription,
 	JsonObject,
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
-
-// eslint-disable-next-line @n8n/community-nodes/no-restricted-imports
-import * as fs from 'fs';
-// eslint-disable-next-line @n8n/community-nodes/no-restricted-imports
-import * as path from 'path';
 
 interface ISubtask {
 	id: string;
@@ -51,42 +45,6 @@ interface IDb {
 	settings: IDataObject;
 }
 
-function getDbFromFile(context: ILoadOptionsFunctions | IExecuteFunctions): IDb {
-	try {
-		let filePath = 'data.json';
-		try {
-			filePath = context.getNodeParameter('filePath', 0, 'data.json') as string;
-		} catch {
-			// Ignore if parameter is not available yet
-		}
-
-		const resolvedPath = path.resolve(filePath);
-		if (fs.existsSync(resolvedPath)) {
-			const content = fs.readFileSync(resolvedPath, 'utf8');
-			return JSON.parse(content) as IDb;
-		}
-	} catch {
-		// Ignore file read errors and use fallback
-	}
-
-	return {
-		tasks: [
-			{ id: 't1', title: 'Call Mom', status: 'inbox', contexts: ['@home'] },
-			{ id: 't2', title: 'Process email inbox', status: 'next', contexts: ['@work'] },
-			{ id: 't3', title: 'Draft project proposal', status: 'next', projectId: 'p1', contexts: ['@work'] },
-			{ id: 't4', title: 'Buy paint samples', status: 'next', projectId: 'p2', contexts: ['@errands'] },
-			{ id: 't5', title: 'Waiting for design approval', status: 'waiting', projectId: 'p1', contexts: ['@work'] },
-			{ id: 't6', title: 'Learn to play guitar', status: 'someday', contexts: ['@home'] },
-			{ id: 't7', title: 'Weekly Grocery Run', status: 'next', contexts: ['@errands'] },
-		],
-		projects: [
-			{ id: 'p1', title: 'Website Redesign', status: 'active', color: '#3b82f6' },
-			{ id: 'p2', title: 'Home Renovation', status: 'active', color: '#10b981' },
-		],
-		settings: {},
-	};
-}
-
 export class Mindwtr implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Mindwtr',
@@ -95,7 +53,7 @@ export class Mindwtr implements INodeType {
 		group: ['transform'],
 		version: [1],
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
-		description: 'Manage Mindwtr tasks, projects, and subtasks via JSON file',
+		description: 'Manage Mindwtr tasks, projects, and subtasks via binary JSON file',
 		defaults: {
 			name: 'Mindwtr',
 		},
@@ -273,21 +231,17 @@ export class Mindwtr implements INodeType {
 			// TASK FIELDS
 			// ========================================
 			{
-				displayName: 'Task Name or ID',
+				displayName: 'Task ID',
 				name: 'taskId',
-				type: 'options',
-				typeOptions: {
-					loadOptionsMethod: 'getTasks',
-				},
+				type: 'string',
 				default: '',
-				required: true,
 				displayOptions: {
 					show: {
 						resource: ['task'],
 						operation: ['update', 'delete', 'validate', 'attach', 'detach'],
 					},
 				},
-				description: 'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+				description: 'ID of the target task (auto-detected from input item if left empty)',
 			},
 			{
 				displayName: 'Title',
@@ -304,21 +258,17 @@ export class Mindwtr implements INodeType {
 				description: 'Title of the new task',
 			},
 			{
-				displayName: 'Project Name or ID',
+				displayName: 'Project ID',
 				name: 'projectId',
-				type: 'options',
-				typeOptions: {
-					loadOptionsMethod: 'getProjects',
-				},
+				type: 'string',
 				default: '',
-				required: true,
 				displayOptions: {
 					show: {
 						resource: ['task'],
 						operation: ['attach'],
 					},
 				},
-				description: 'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+				description: 'ID of the project to attach the task to (auto-detected from input item if left empty)',
 			},
 			{
 				displayName: 'Completed',
@@ -525,21 +475,17 @@ export class Mindwtr implements INodeType {
 			// PROJECT FIELDS
 			// ========================================
 			{
-				displayName: 'Project Name or ID',
+				displayName: 'Project ID',
 				name: 'projectId',
-				type: 'options',
-				typeOptions: {
-					loadOptionsMethod: 'getProjects',
-				},
+				type: 'string',
 				default: '',
-				required: true,
 				displayOptions: {
 					show: {
 						resource: ['project'],
 						operation: ['update', 'delete'],
 					},
 				},
-				description: 'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+				description: 'ID of the target project (auto-detected from input item if left empty)',
 			},
 			{
 				displayName: 'Title',
@@ -635,39 +581,30 @@ export class Mindwtr implements INodeType {
 			// SUBTASK FIELDS
 			// ========================================
 			{
-				displayName: 'Task Name or ID',
+				displayName: 'Task ID',
 				name: 'taskId',
-				type: 'options',
-				typeOptions: {
-					loadOptionsMethod: 'getTasks',
-				},
+				type: 'string',
 				default: '',
-				required: true,
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
 						operation: ['create', 'update', 'delete', 'validate', 'getAll'],
 					},
 				},
-				description: 'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+				description: 'ID of the parent task (auto-detected from input item if left empty)',
 			},
 			{
-				displayName: 'Subtask Name or ID',
+				displayName: 'Subtask ID',
 				name: 'subtaskId',
-				type: 'options',
-				typeOptions: {
-					loadOptionsMethod: 'getSubtasks',
-					loadOptionsDependsOn: ['taskId'],
-				},
+				type: 'string',
 				default: '',
-				required: true,
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
 						operation: ['update', 'delete', 'validate'],
 					},
 				},
-				description: 'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
+				description: 'ID of the target subtask (auto-detected from input item if left empty)',
 			},
 			{
 				displayName: 'Title',
@@ -701,14 +638,6 @@ export class Mindwtr implements INodeType {
 			// OPTIONS / FILE
 			// ========================================
 			{
-				displayName: 'File Path',
-				name: 'filePath',
-				type: 'string',
-				default: 'data.json',
-				required: true,
-				description: 'Path to the Mindwtr JSON file (e.g. data.JSON)',
-			},
-			{
 				displayName: 'Binary Property',
 				name: 'binaryPropertyName',
 				type: 'string',
@@ -718,43 +647,13 @@ export class Mindwtr implements INodeType {
 		],
 	};
 
-	methods = {
-		loadOptions: {
-			async getProjects(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const db = getDbFromFile(this);
-				return db.projects.map((p) => ({
-					name: `${p.title} (${p.id})`,
-					value: p.id,
-				}));
-			},
-			async getTasks(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const db = getDbFromFile(this);
-				return db.tasks.map((t) => ({
-					name: `${t.title} (${t.id}) - [${t.status}]`,
-					value: t.id,
-				}));
-			},
-			async getSubtasks(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
-				const db = getDbFromFile(this);
-				let taskId = '';
-				try {
-					taskId = this.getNodeParameter('taskId', '') as string;
-				} catch {
-					// Ignore if parameter is not available yet
-				}
-				const task = db.tasks.find((t) => t.id === taskId);
-				const subtasks = task?.subtasks || [];
-				return subtasks.map((st) => ({
-					name: `${st.title} (${st.id})`,
-					value: st.id,
-				}));
-			},
-		},
-	};
-
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
+
+		// Shared DB state loaded once from binary data of the first item (or cached)
+		let db: IDb | null = null;
+		let sharedBinaryData!: IBinaryData;
 
 		for (let i = 0; i < items.length; i++) {
 			try {
@@ -763,18 +662,22 @@ export class Mindwtr implements INodeType {
 				const binaryPropertyName = this.getNodeParameter('binaryPropertyName', i, 'data') as string;
 
 				const item = items[i];
-				let db: IDb;
 
-				if (item.binary && item.binary[binaryPropertyName]) {
-					const buffer = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);
-					db = JSON.parse(buffer.toString('utf8')) as IDb;
-				} else {
-					db = getDbFromFile(this);
+				if (!db) {
+					if (item.binary && item.binary[binaryPropertyName]) {
+						const buffer = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);
+						db = JSON.parse(buffer.toString('utf8')) as IDb;
+					} else {
+						throw new NodeOperationError(
+							this.getNode(),
+							`Binary property "${binaryPropertyName}" not found on input item`,
+							{ itemIndex: i }
+						);
+					}
+					db.tasks = db.tasks || [];
+					db.projects = db.projects || [];
+					db.settings = db.settings || {};
 				}
-
-				db.tasks = db.tasks || [];
-				db.projects = db.projects || [];
-				db.settings = db.settings || {};
 
 				const now = new Date().toISOString();
 
@@ -830,7 +733,10 @@ export class Mindwtr implements INodeType {
 
 						db.tasks.push(newTask);
 					} else if (operation === 'update') {
-						const taskId = this.getNodeParameter('taskId', i) as string;
+						let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
+						if (!taskId) {
+							taskId = (item.json.id as string) || (item.json.taskId as string) || '';
+						}
 						const updateFields = this.getNodeParameter('updateFields', i) as IDataObject;
 
 						const task = db.tasks.find((t) => t.id === taskId);
@@ -864,14 +770,20 @@ export class Mindwtr implements INodeType {
 						}
 						task.updatedAt = now;
 					} else if (operation === 'delete') {
-						const taskId = this.getNodeParameter('taskId', i) as string;
+						let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
+						if (!taskId) {
+							taskId = (item.json.id as string) || (item.json.taskId as string) || '';
+						}
 						const initialLength = db.tasks.length;
 						db.tasks = db.tasks.filter((t) => t.id !== taskId);
 						if (db.tasks.length === initialLength) {
 							throw new NodeOperationError(this.getNode(), `Task with ID "${taskId}" not found`, { itemIndex: i });
 						}
 					} else if (operation === 'validate') {
-						const taskId = this.getNodeParameter('taskId', i) as string;
+						let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
+						if (!taskId) {
+							taskId = (item.json.id as string) || (item.json.taskId as string) || '';
+						}
 						const completed = this.getNodeParameter('completed', i, true) as boolean;
 
 						const task = db.tasks.find((t) => t.id === taskId);
@@ -882,8 +794,14 @@ export class Mindwtr implements INodeType {
 						task.status = completed ? 'completed' : 'inbox';
 						task.updatedAt = now;
 					} else if (operation === 'attach') {
-						const taskId = this.getNodeParameter('taskId', i) as string;
-						const projectId = this.getNodeParameter('projectId', i) as string;
+						let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
+						if (!taskId) {
+							taskId = (item.json.id as string) || (item.json.taskId as string) || '';
+						}
+						let projectId = (this.getNodeParameter('projectId', i, '') as string).trim();
+						if (!projectId) {
+							projectId = (item.json.projectId as string) || (item.json.id as string) || '';
+						}
 
 						const task = db.tasks.find((t) => t.id === taskId);
 						if (!task) {
@@ -898,7 +816,10 @@ export class Mindwtr implements INodeType {
 						task.projectId = projectId;
 						task.updatedAt = now;
 					} else if (operation === 'detach') {
-						const taskId = this.getNodeParameter('taskId', i) as string;
+						let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
+						if (!taskId) {
+							taskId = (item.json.id as string) || (item.json.taskId as string) || '';
+						}
 
 						const task = db.tasks.find((t) => t.id === taskId);
 						if (!task) {
@@ -924,7 +845,10 @@ export class Mindwtr implements INodeType {
 
 						db.projects.push(newProject);
 					} else if (operation === 'update') {
-						const projectId = this.getNodeParameter('projectId', i) as string;
+						let projectId = (this.getNodeParameter('projectId', i, '') as string).trim();
+						if (!projectId) {
+							projectId = (item.json.id as string) || (item.json.projectId as string) || '';
+						}
 						const updateFields = this.getNodeParameter('updateFields', i) as IDataObject;
 
 						const project = db.projects.find((p) => p.id === projectId);
@@ -937,7 +861,10 @@ export class Mindwtr implements INodeType {
 						if (updateFields.color) project.color = updateFields.color as string;
 						project.updatedAt = now;
 					} else if (operation === 'delete') {
-						const projectId = this.getNodeParameter('projectId', i) as string;
+						let projectId = (this.getNodeParameter('projectId', i, '') as string).trim();
+						if (!projectId) {
+							projectId = (item.json.id as string) || (item.json.projectId as string) || '';
+						}
 						const initialLength = db.projects.length;
 						db.projects = db.projects.filter((p) => p.id !== projectId);
 						if (db.projects.length === initialLength) {
@@ -951,7 +878,10 @@ export class Mindwtr implements INodeType {
 						}
 					}
 				} else if (resource === 'subtask') {
-					const taskId = this.getNodeParameter('taskId', i) as string;
+					let taskId = (this.getNodeParameter('taskId', i, '') as string).trim();
+					if (!taskId) {
+						taskId = (item.json.taskId as string) || (item.json.id as string) || '';
+					}
 					const task = db.tasks.find((t) => t.id === taskId);
 					if (!task) {
 						throw new NodeOperationError(this.getNode(), `Task with ID "${taskId}" not found`, { itemIndex: i });
@@ -979,7 +909,10 @@ export class Mindwtr implements INodeType {
 						task.subtasks.push(newSubtask);
 						task.updatedAt = now;
 					} else if (operation === 'update') {
-						const subtaskId = this.getNodeParameter('subtaskId', i) as string;
+						let subtaskId = (this.getNodeParameter('subtaskId', i, '') as string).trim();
+						if (!subtaskId) {
+							subtaskId = (item.json.id as string) || (item.json.subtaskId as string) || '';
+						}
 						const title = this.getNodeParameter('title', i) as string;
 
 						const subtask = task.subtasks.find((st) => st.id === subtaskId);
@@ -990,7 +923,10 @@ export class Mindwtr implements INodeType {
 						subtask.updatedAt = now;
 						task.updatedAt = now;
 					} else if (operation === 'delete') {
-						const subtaskId = this.getNodeParameter('subtaskId', i) as string;
+						let subtaskId = (this.getNodeParameter('subtaskId', i, '') as string).trim();
+						if (!subtaskId) {
+							subtaskId = (item.json.id as string) || (item.json.subtaskId as string) || '';
+						}
 						const initialLen = task.subtasks.length;
 						task.subtasks = task.subtasks.filter((st) => st.id !== subtaskId);
 						if (task.subtasks.length === initialLen) {
@@ -998,7 +934,10 @@ export class Mindwtr implements INodeType {
 						}
 						task.updatedAt = now;
 					} else if (operation === 'validate') {
-						const subtaskId = this.getNodeParameter('subtaskId', i) as string;
+						let subtaskId = (this.getNodeParameter('subtaskId', i, '') as string).trim();
+						if (!subtaskId) {
+							subtaskId = (item.json.id as string) || (item.json.subtaskId as string) || '';
+						}
 						const completed = this.getNodeParameter('completed', i, true) as boolean;
 
 						const subtask = task.subtasks.find((st) => st.id === subtaskId);
@@ -1012,13 +951,15 @@ export class Mindwtr implements INodeType {
 				}
 
 				const jsonString = JSON.stringify(db, null, 2);
-				item.json = { ...db };
-				item.binary = item.binary || {};
-				item.binary[binaryPropertyName] = await this.helpers.prepareBinaryData(
+				sharedBinaryData = await this.helpers.prepareBinaryData(
 					Buffer.from(jsonString, 'utf8'),
 					'data.json',
 					'application/json'
 				);
+
+				item.json = { ...db };
+				item.binary = item.binary || {};
+				item.binary[binaryPropertyName] = sharedBinaryData;
 
 				returnData.push({
 					json: item.json,
