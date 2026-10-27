@@ -1,12 +1,19 @@
 import type {
 	IDataObject,
 	IExecuteFunctions,
+	ILoadOptionsFunctions,
 	INodeExecutionData,
+	INodePropertyOptions,
 	INodeType,
 	INodeTypeDescription,
 	JsonObject,
 } from 'n8n-workflow';
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
+
+// eslint-disable-next-line @n8n/community-nodes/no-restricted-imports
+import * as fs from 'fs';
+// eslint-disable-next-line @n8n/community-nodes/no-restricted-imports
+import * as path from 'path';
 
 interface ISubtask {
 	id: string;
@@ -42,6 +49,42 @@ interface IDb {
 	tasks: ITask[];
 	projects: IProject[];
 	settings: IDataObject;
+}
+
+function getDbFromFile(context: ILoadOptionsFunctions | IExecuteFunctions): IDb {
+	try {
+		let filePath = 'data.json';
+		try {
+			filePath = context.getNodeParameter('filePath', 0, 'data.json') as string;
+		} catch {
+			// Ignore if parameter is not available yet
+		}
+
+		const resolvedPath = path.resolve(filePath);
+		if (fs.existsSync(resolvedPath)) {
+			const content = fs.readFileSync(resolvedPath, 'utf8');
+			return JSON.parse(content) as IDb;
+		}
+	} catch {
+		// Ignore file read errors and use fallback
+	}
+
+	return {
+		tasks: [
+			{ id: 't1', title: 'Call Mom', status: 'inbox', contexts: ['@home'] },
+			{ id: 't2', title: 'Process email inbox', status: 'next', contexts: ['@work'] },
+			{ id: 't3', title: 'Draft project proposal', status: 'next', projectId: 'p1', contexts: ['@work'] },
+			{ id: 't4', title: 'Buy paint samples', status: 'next', projectId: 'p2', contexts: ['@errands'] },
+			{ id: 't5', title: 'Waiting for design approval', status: 'waiting', projectId: 'p1', contexts: ['@work'] },
+			{ id: 't6', title: 'Learn to play guitar', status: 'someday', contexts: ['@home'] },
+			{ id: 't7', title: 'Weekly Grocery Run', status: 'next', contexts: ['@errands'] },
+		],
+		projects: [
+			{ id: 'p1', title: 'Website Redesign', status: 'active', color: '#3b82f6' },
+			{ id: 'p2', title: 'Home Renovation', status: 'active', color: '#10b981' },
+		],
+		settings: {},
+	};
 }
 
 export class Mindwtr implements INodeType {
@@ -230,18 +273,21 @@ export class Mindwtr implements INodeType {
 			// TASK FIELDS
 			// ========================================
 			{
-				displayName: 'Task ID',
+				displayName: 'Task Name or ID',
 				name: 'taskId',
-				type: 'string',
-				required: true,
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getTasks',
+				},
 				default: '',
+				required: true,
 				displayOptions: {
 					show: {
 						resource: ['task'],
 						operation: ['update', 'delete', 'validate', 'attach', 'detach'],
 					},
 				},
-				description: 'ID of the target task (supports expressions from input file)',
+				description: 'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 			},
 			{
 				displayName: 'Title',
@@ -258,18 +304,21 @@ export class Mindwtr implements INodeType {
 				description: 'Title of the new task',
 			},
 			{
-				displayName: 'Project ID',
+				displayName: 'Project Name or ID',
 				name: 'projectId',
-				type: 'string',
-				required: true,
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getProjects',
+				},
 				default: '',
+				required: true,
 				displayOptions: {
 					show: {
 						resource: ['task'],
 						operation: ['attach'],
 					},
 				},
-				description: 'ID of the project to attach the task to',
+				description: 'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 			},
 			{
 				displayName: 'Completed',
@@ -476,18 +525,21 @@ export class Mindwtr implements INodeType {
 			// PROJECT FIELDS
 			// ========================================
 			{
-				displayName: 'Project ID',
+				displayName: 'Project Name or ID',
 				name: 'projectId',
-				type: 'string',
-				required: true,
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getProjects',
+				},
 				default: '',
+				required: true,
 				displayOptions: {
 					show: {
 						resource: ['project'],
 						operation: ['update', 'delete'],
 					},
 				},
-				description: 'ID of the target project',
+				description: 'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 			},
 			{
 				displayName: 'Title',
@@ -583,32 +635,39 @@ export class Mindwtr implements INodeType {
 			// SUBTASK FIELDS
 			// ========================================
 			{
-				displayName: 'Task ID',
+				displayName: 'Task Name or ID',
 				name: 'taskId',
-				type: 'string',
-				required: true,
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getTasks',
+				},
 				default: '',
+				required: true,
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
 						operation: ['create', 'update', 'delete', 'validate', 'getAll'],
 					},
 				},
-				description: 'ID of the parent task',
+				description: 'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 			},
 			{
-				displayName: 'Subtask ID',
+				displayName: 'Subtask Name or ID',
 				name: 'subtaskId',
-				type: 'string',
-				required: true,
+				type: 'options',
+				typeOptions: {
+					loadOptionsMethod: 'getSubtasks',
+					loadOptionsDependsOn: ['taskId'],
+				},
 				default: '',
+				required: true,
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
 						operation: ['update', 'delete', 'validate'],
 					},
 				},
-				description: 'ID of the target subtask',
+				description: 'Choose from the list, or specify an ID using an <a href="https://docs.n8n.io/code/expressions/">expression</a>',
 			},
 			{
 				displayName: 'Title',
@@ -642,6 +701,14 @@ export class Mindwtr implements INodeType {
 			// OPTIONS / FILE
 			// ========================================
 			{
+				displayName: 'File Path',
+				name: 'filePath',
+				type: 'string',
+				default: 'data.json',
+				required: true,
+				description: 'Path to the Mindwtr JSON file (e.g. data.JSON)',
+			},
+			{
 				displayName: 'Binary Property',
 				name: 'binaryPropertyName',
 				type: 'string',
@@ -649,6 +716,40 @@ export class Mindwtr implements INodeType {
 				description: 'Name of the binary property containing the JSON file',
 			},
 		],
+	};
+
+	methods = {
+		loadOptions: {
+			async getProjects(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const db = getDbFromFile(this);
+				return db.projects.map((p) => ({
+					name: `${p.title} (${p.id})`,
+					value: p.id,
+				}));
+			},
+			async getTasks(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const db = getDbFromFile(this);
+				return db.tasks.map((t) => ({
+					name: `${t.title} (${t.id}) - [${t.status}]`,
+					value: t.id,
+				}));
+			},
+			async getSubtasks(this: ILoadOptionsFunctions): Promise<INodePropertyOptions[]> {
+				const db = getDbFromFile(this);
+				let taskId = '';
+				try {
+					taskId = this.getNodeParameter('taskId', '') as string;
+				} catch {
+					// Ignore if parameter is not available yet
+				}
+				const task = db.tasks.find((t) => t.id === taskId);
+				const subtasks = task?.subtasks || [];
+				return subtasks.map((st) => ({
+					name: `${st.title} (${st.id})`,
+					value: st.id,
+				}));
+			},
+		},
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
@@ -668,11 +769,7 @@ export class Mindwtr implements INodeType {
 					const buffer = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);
 					db = JSON.parse(buffer.toString('utf8')) as IDb;
 				} else {
-					throw new NodeOperationError(
-						this.getNode(),
-						`Binary property "${binaryPropertyName}" not found on input item`,
-						{ itemIndex: i }
-					);
+					db = getDbFromFile(this);
 				}
 
 				db.tasks = db.tasks || [];
