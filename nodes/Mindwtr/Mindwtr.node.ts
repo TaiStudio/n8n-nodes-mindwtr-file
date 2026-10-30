@@ -49,7 +49,7 @@ interface IDb {
 	settings: IDataObject;
 }
 
-/** Anything in the input file that can be referenced by ID or by name */
+/** Anything in the input data that can be referenced by ID or by name */
 interface INamedEntity {
 	id: string;
 	title: string;
@@ -127,7 +127,7 @@ function resolveReference<T extends INamedEntity>(
 
 	throw new NodeOperationError(
 		ctx.getNode(),
-		`${entityLabel} with ID or name "${value}"${context} not found in the input file. Available ${plural}: ${formatEntityList(
+		`${entityLabel} with ID or name "${value}"${context} not found in the input data. Available ${plural}: ${formatEntityList(
 			entities,
 		)}.`,
 		{ itemIndex },
@@ -157,7 +157,7 @@ function resolveRequired<T extends INamedEntity>(
 
 // ==========================================================================
 // Resource locator helpers: the ID fields can be filled from a list built
-// out of the binary file present on the input.
+// out of the data present on the node's input.
 // ==========================================================================
 
 /** A page is small enough for the editor to scroll through without lagging */
@@ -195,39 +195,141 @@ interface IBinaryReference {
 type IListSource = { db: IDb } | { error: string };
 
 const LIST_SOURCE_NOT_SET =
-	'List source is not set on this node. Set the "List Source" parameter below to the default expression (={{ $binary.data }}), then open the list again.';
+	'The list could not read the input data. Set the "List Source" parameter below to the parsed data of the input item, e.g. `={{ $json }}`, then open the list again.';
 
-/** Turns the parsed content of the input file into the entities the lists are built from */
-function parseMindwtrDb(raw: unknown): IListSource {
-	const source = (Array.isArray(raw) ? { tasks: raw } : raw) as Partial<IDb> | null | undefined;
-	const tasks = Array.isArray(source?.tasks) ? (source.tasks as ITask[]) : [];
-	const projects = Array.isArray(source?.projects) ? (source.projects as IProject[]) : [];
+const MINDWTR_DATA_INVALID =
+	'The input data does not look like Mindwtr data: every task and project needs both an "id" and a "title".';
 
-	const isNamedEntity = (entity: unknown): entity is INamedEntity =>
-		typeof entity === 'object' &&
-		entity !== null &&
-		typeof (entity as INamedEntity).id === 'string' &&
-		typeof (entity as INamedEntity).title === 'string';
+const MINDWTR_DATA_EMPTY =
+	'No task or project was found in the input data. Run the workflow once, or pin the input data, so the editor can read it.';
 
-	if (!tasks.every(isNamedEntity) || !projects.every(isNamedEntity)) {
+/** Payload keys a node upstream may nest the data under, e.g. `{ data: … }` */
+const LIST_SOURCE_WRAPPER_KEYS = ['data', 'json', 'body', 'result', 'output', 'content'] as const;
+
+/** How deep wrappers are followed before giving up on the input data */
+const MAX_WRAPPER_DEPTH = 3;
+
+interface ICollectedEntities {
+	tasks: unknown[];
+	projects: unknown[];
+	settings: IDataObject;
+}
+
+function isNamedEntity(value: unknown): value is INamedEntity {
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		typeof (value as INamedEntity).id === 'string' &&
+		typeof (value as INamedEntity).title === 'string'
+	);
+}
+
+/**
+ * Finds the tasks and projects inside whatever the input item holds: the data
+ * itself, a bare list of tasks, a single task, or a payload nested under a
+ * common key such as the `data` returned by the "Extract From File" node.
+ */
+function collectEntities(value: unknown, depth = 0): ICollectedEntities {
+	if (depth > MAX_WRAPPER_DEPTH || value === null || typeof value !== 'object') {
+		return { tasks: [], projects: [], settings: {} };
+	}
+
+	if (Array.isArray(value)) {
+		// Either a bare list of entities, or one wrapper per input item
+		const collected: ICollectedEntities = { tasks: [], projects: [], settings: {} };
+		for (const entry of value) {
+			const inner = collectEntities(entry, depth + 1);
+			collected.tasks.push(...inner.tasks);
+			collected.projects.push(...inner.projects);
+			if (Object.keys(collected.settings).length === 0) {
+				collected.settings = inner.settings;
+			}
+		}
+
+		if (collected.tasks.length === 0 && value.length > 0 && value.every(isNamedEntity)) {
+			collected.tasks.push(...value);
+		}
+
+		return collected;
+	}
+
+	const record = value as Record<string, unknown>;
+
+	// The data itself
+	if (Array.isArray(record.tasks) || Array.isArray(record.projects)) {
+		const settings =
+			typeof record.settings === 'object' && record.settings !== null
+				? (record.settings as IDataObject)
+				: {};
 		return {
-			error:
-				'The input file does not look like a Mindwtr data file: every task and project needs both an "id" and a "title".',
+			tasks: record.tasks as unknown[],
+			projects: (record.projects as unknown[]) ?? [],
+			settings,
 		};
 	}
 
-	if (tasks.length === 0 && projects.length === 0) {
-		return { error: 'The input file does not contain any task or project.' };
+	// A single task or project on its own
+	if (isNamedEntity(record)) {
+		return { tasks: [record], projects: [], settings: {} };
 	}
 
-	return { db: { tasks, projects, settings: {} } };
+	// Something wrapping the data, e.g. `{ data: … }` from "Extract From File"
+	for (const key of LIST_SOURCE_WRAPPER_KEYS) {
+		if (key in record) {
+			const inner = collectEntities(unwrapJsonValue(record[key]), depth + 1);
+			if (inner.tasks.length > 0 || inner.projects.length > 0) {
+				return inner;
+			}
+		}
+	}
+
+	return { tasks: [], projects: [], settings: {} };
+}
+
+/** A node upstream may hand the data over as a JSON string rather than an object */
+function unwrapJsonValue(value: unknown): unknown {
+	if (typeof value !== 'string') {
+		return value;
+	}
+
+	const trimmed = value.trim();
+	if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
+		return value;
+	}
+
+	try {
+		return JSON.parse(trimmed);
+	} catch {
+		return value;
+	}
+}
+
+/** Turns the parsed input data into the entities the lists are built from */
+function parseMindwtrDb(raw: unknown): IListSource {
+	const collected = collectEntities(raw);
+
+	if (collected.tasks.length === 0 && collected.projects.length === 0) {
+		return { error: MINDWTR_DATA_EMPTY };
+	}
+
+	if (!collected.tasks.every(isNamedEntity) || !collected.projects.every(isNamedEntity)) {
+		return { error: MINDWTR_DATA_INVALID };
+	}
+
+	return {
+		db: {
+			tasks: collected.tasks as ITask[],
+			projects: collected.projects as IProject[],
+			settings: collected.settings,
+		},
+	};
 }
 
 function parseJsonBuffer(buffer: Buffer): IListSource {
 	try {
 		return parseMindwtrDb(JSON.parse(buffer.toString('utf8')));
 	} catch {
-		return { error: 'The input file could not be read as JSON.' };
+		return { error: 'The input data could not be read as JSON.' };
 	}
 }
 
@@ -235,9 +337,8 @@ function parseJsonBuffer(buffer: Buffer): IListSource {
  * Turns the resolved "List Source" parameter into the entities to list.
  *
  * The editor resolves the parameter before the list is requested, so the value is
- * already the binary reference of the input item. The file bytes are only reachable
- * when n8n keeps them inline (memory binary data mode, or an expression that points
- * straight at the parsed data).
+ * already the input data of the item — the parsed JSON when it is exposed as such.
+ * A binary reference is still accepted, as long as n8n keeps the bytes inline.
  */
 async function resolveListSourceValue(raw: unknown): Promise<IListSource> {
 	if (typeof raw === 'string') {
@@ -246,7 +347,7 @@ async function resolveListSourceValue(raw: unknown): Promise<IListSource> {
 			try {
 				return await resolveListSourceValue(JSON.parse(trimmed));
 			} catch {
-				return { error: 'The input file could not be read as JSON.' };
+				return { error: 'The input data could not be read as JSON.' };
 			}
 		}
 		return { error: LIST_SOURCE_NOT_SET };
@@ -264,25 +365,26 @@ async function resolveListSourceValue(raw: unknown): Promise<IListSource> {
 	const inlineData = typeof reference.data === 'string' ? reference.data : '';
 	const rawId = typeof reference.id === 'string' ? reference.id.trim() : '';
 
-	// Only some binary data modes keep the payload next to its id, e.g. `memory:<base64>`
-	if (inlineData !== '') {
-		return parseJsonBuffer(Buffer.from(inlineData, 'base64'));
-	}
+	// A binary reference, when the data has not been extracted into JSON yet
+	if (inlineData !== '' && rawId !== '' && !Array.isArray((raw as Partial<IDb>).tasks)) {
+		const separator = rawId.indexOf(':');
+		const mode = separator === -1 ? '' : rawId.slice(0, separator);
 
-	if (rawId !== '') {
-		const mode = rawId.slice(0, rawId.indexOf(':') === -1 ? rawId.length : rawId.indexOf(':'));
+		if (mode !== '' && mode !== 'filesystem' && mode !== 'filesystem-v2') {
+			return parseJsonBuffer(Buffer.from(inlineData, 'base64'));
+		}
+
 		return {
 			error:
 				`The input file ("${rawId}") is kept by n8n in its "${mode}" binary data mode, where this node cannot read it. ` +
-				'Set N8N_DEFAULT_BINARY_DATA_MODE=memory on n8n, or point the "List Source" parameter at the data itself ' +
-				'(e.g. `={{ $json }}` of the node that outputs the file content), or fill the ID fields by hand.',
+				'Extract the JSON with a node such as "Extract From File" and connect it to this node, or fill the ID fields by hand.',
 		};
 	}
 
 	return parseMindwtrDb(raw);
 }
 
-/** Loads the input file once, then serves one page of the matching entries */
+/** Loads the input data once, then serves one page of the matching entries */
 async function listFromInput(
 	ctx: ILoadOptionsFunctions,
 	filter: string | undefined,
@@ -1056,16 +1158,17 @@ export class Mindwtr implements INodeType {
 				displayName: 'List Source',
 				name: 'listSource',
 				type: 'string',
-				default: '={{ $binary.data }}',
+				default: '={{ $json }}',
 				description:
-					'Binary JSON file used to fill the "From list" mode of the ID fields. Defaults to the "data" property of the input item; point it to another binary property if your file is attached under a different name, or straight at the parsed content of the input item when it is already exposed as JSON data.',
+					'Input data used to fill the "From list" mode of the ID fields. Defaults to the whole input item; point it to a property of that item when the data is nested, e.g. the "data" property returned by the "Extract From File" node.',
 			},
 			{
 				displayName: 'Binary Property',
 				name: 'binaryPropertyName',
 				type: 'string',
 				default: 'data',
-				description: 'Name of the binary property containing the JSON file',
+				description:
+					'Name of the binary property to read the JSON file from, and to write the updated file back to. Only used when a file is still attached to the input item; ignored when the data already comes as JSON.',
 			},
 		],
 	};
@@ -1117,7 +1220,7 @@ export class Mindwtr implements INodeType {
 					if (parents.length === 0) {
 						return [
 							{
-								name: `⚠ Task reference "${parentReference}" was not found in the input file.`,
+								name: `⚠ Task reference "${parentReference}" was not found in the input data.`,
 								value: '',
 								disabled: true,
 							},
@@ -1158,11 +1261,12 @@ export class Mindwtr implements INodeType {
 						const buffer = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);
 						db = JSON.parse(buffer.toString('utf8')) as IDb;
 					} else {
-						throw new NodeOperationError(
-							this.getNode(),
-							`Binary property "${binaryPropertyName}" not found on input item`,
-							{ itemIndex: i }
-						);
+						// No binary file: the data has been extracted into JSON upstream
+						const parsed = parseMindwtrDb(item.json);
+						if ('error' in parsed) {
+							throw new NodeOperationError(this.getNode(), parsed.error, { itemIndex: i });
+						}
+						db = parsed.db;
 					}
 					db.tasks = db.tasks || [];
 					db.projects = db.projects || [];
