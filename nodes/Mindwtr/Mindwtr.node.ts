@@ -580,10 +580,16 @@ export class Mindwtr implements INodeType {
 						},
 					},
 					{
+						displayName: 'Name',
+						name: 'name',
+						type: 'string',
+						placeholder: 'Type the name',
+					},
+					{
 						displayName: 'ID',
 						name: 'id',
 						type: 'string',
-						placeholder: 'ID or name',
+						placeholder: 'Exact ID',
 					},
 				],
 				displayOptions: {
@@ -593,7 +599,7 @@ export class Mindwtr implements INodeType {
 					},
 				},
 				description:
-					'ID or name of the target task, as found in the file on input. Leave empty to auto-detect it from the input item.',
+					'ID or name of the target task, as found in the input data. Leave empty to auto-detect it from the input item.',
 			},
 			{
 				displayName: 'Title',
@@ -625,10 +631,16 @@ export class Mindwtr implements INodeType {
 						},
 					},
 					{
+						displayName: 'Name',
+						name: 'name',
+						type: 'string',
+						placeholder: 'Type the name',
+					},
+					{
 						displayName: 'ID',
 						name: 'id',
 						type: 'string',
-						placeholder: 'ID or name',
+						placeholder: 'Exact ID',
 					},
 				],
 				displayOptions: {
@@ -638,7 +650,7 @@ export class Mindwtr implements INodeType {
 					},
 				},
 				description:
-					'ID or name of the project to attach the task to, as found in the file on input. Leave empty to auto-detect it from the input item.',
+					'ID or name of the project to attach the task to, as found in the input data. Leave empty to auto-detect it from the input item.',
 			},
 			{
 				displayName: 'Completed',
@@ -712,13 +724,19 @@ export class Mindwtr implements INodeType {
 								},
 							},
 							{
+								displayName: 'Name',
+								name: 'name',
+								type: 'string',
+								placeholder: 'Type the name',
+							},
+							{
 								displayName: 'ID',
 								name: 'id',
 								type: 'string',
-								placeholder: 'ID or name',
+								placeholder: 'Exact ID',
 							},
 						],
-						description: 'Filter by project ID or name, as found in the file on input',
+						description: 'Filter by project ID or name, as found in the input data',
 					},
 					{
 						displayName: 'Status',
@@ -779,14 +797,20 @@ export class Mindwtr implements INodeType {
 								},
 							},
 							{
+								displayName: 'Name',
+								name: 'name',
+								type: 'string',
+								placeholder: 'Type the name',
+							},
+							{
 								displayName: 'ID',
 								name: 'id',
 								type: 'string',
-								placeholder: 'ID or name',
+								placeholder: 'Exact ID',
 							},
 						],
 						description:
-							'Project ID or name to associate with the task, as found in the file on input',
+							'Project ID or name to associate with the task, as found in the input data',
 					},
 					{
 						displayName: 'Status',
@@ -854,14 +878,20 @@ export class Mindwtr implements INodeType {
 								},
 							},
 							{
+								displayName: 'Name',
+								name: 'name',
+								type: 'string',
+								placeholder: 'Type the name',
+							},
+							{
 								displayName: 'ID',
 								name: 'id',
 								type: 'string',
-								placeholder: 'ID or name',
+								placeholder: 'Exact ID',
 							},
 						],
 						description:
-							'Project ID or name associated with the task, as found in the file on input. Leave empty to detach the task from its project.',
+							'Project ID or name associated with the task, as found in the input data. Leave empty to detach the task from its project.',
 					},
 					{
 						displayName: 'Status',
@@ -913,10 +943,16 @@ export class Mindwtr implements INodeType {
 						},
 					},
 					{
+						displayName: 'Name',
+						name: 'name',
+						type: 'string',
+						placeholder: 'Type the name',
+					},
+					{
 						displayName: 'ID',
 						name: 'id',
 						type: 'string',
-						placeholder: 'ID or name',
+						placeholder: 'Exact ID',
 					},
 				],
 				displayOptions: {
@@ -926,7 +962,7 @@ export class Mindwtr implements INodeType {
 					},
 				},
 				description:
-					'ID or name of the target project, as found in the file on input. Leave empty to auto-detect it from the input item.',
+					'ID or name of the target project, as found in the input data. Leave empty to auto-detect it from the input item.',
 			},
 			{
 				displayName: 'Title',
@@ -1037,10 +1073,16 @@ export class Mindwtr implements INodeType {
 						},
 					},
 					{
+						displayName: 'Name',
+						name: 'name',
+						type: 'string',
+						placeholder: 'Type the name',
+					},
+					{
 						displayName: 'ID',
 						name: 'id',
 						type: 'string',
-						placeholder: 'ID or name',
+						placeholder: 'Exact ID',
 					},
 				],
 				displayOptions: {
@@ -1050,7 +1092,7 @@ export class Mindwtr implements INodeType {
 					},
 				},
 				description:
-					'ID or name of the parent task, as found in the file on input. Leave empty to auto-detect it from the input item.',
+					'ID or name of the parent task, as found in the input data. Leave empty to auto-detect it from the input item.',
 			},
 			{
 				displayName: 'Subtask ID or Name',
@@ -1068,10 +1110,16 @@ export class Mindwtr implements INodeType {
 						},
 					},
 					{
+						displayName: 'Name',
+						name: 'name',
+						type: 'string',
+						placeholder: 'Type the name',
+					},
+					{
 						displayName: 'ID',
 						name: 'id',
 						type: 'string',
-						placeholder: 'ID or name',
+						placeholder: 'Exact ID',
 					},
 				],
 				displayOptions: {
@@ -1081,7 +1129,7 @@ export class Mindwtr implements INodeType {
 					},
 				},
 				description:
-					'ID or name of the target subtask, as found in the file on input. Leave empty to auto-detect it from the input item.',
+					'ID or name of the target subtask, as found in the input data. Leave empty to auto-detect it from the input item.',
 			},
 			{
 				displayName: 'Title',
