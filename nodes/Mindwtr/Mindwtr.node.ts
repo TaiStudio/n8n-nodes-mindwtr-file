@@ -1,6 +1,3 @@
-import { promises as fs } from 'fs';
-import os from 'os';
-import path from 'path';
 import type {
 	IBinaryData,
 	IDataObject,
@@ -9,7 +6,7 @@ import type {
 	INodeExecutionData,
 	INodeListSearchItems,
 	INodeListSearchResult,
-	INodePropertyMode,
+
 	INodeType,
 	INodeTypeDescription,
 	JsonObject,
@@ -200,64 +197,6 @@ type IListSource = { db: IDb } | { error: string };
 const LIST_SOURCE_NOT_SET =
 	'List source is not set on this node. Set the "List Source" parameter below to the default expression (={{ $binary.data }}), then open the list again.';
 
-/** Storage roots n8n may keep binary files in, most specific first */
-function binaryStorageRoots(): string[] {
-	const roots: string[] = [];
-	const explicit = process.env.N8N_BINARY_DATA_STORAGE_PATH ?? process.env.N8N_STORAGE_PATH;
-	if (explicit) {
-		roots.push(explicit);
-	}
-
-	const userFolder = process.env.N8N_USER_FOLDER ?? path.join(os.homedir(), '.n8n');
-	roots.push(path.join(userFolder, 'storage'), path.join(userFolder, 'binaryData'));
-
-	return roots;
-}
-
-/**
- * Translates a binary id (`workflows/<workflowId>/executions/<executionId>/binary_data/<uuid>`)
- * into a file inside n8n's binary storage, refusing anything trying to escape it.
- */
-function binaryIdToPath(root: string, binaryId: string): string | null {
-	if (
-		binaryId === '' ||
-		binaryId.startsWith('/') ||
-		binaryId.startsWith('\\') ||
-		/^[a-zA-Z]:/u.test(binaryId)
-	) {
-		return null;
-	}
-
-	const segments = binaryId.split(/[\\/]/u);
-	const unsafe = segments.some(
-		(segment) =>
-			segment === '' ||
-			segment === '.' ||
-			segment === '..' ||
-			segment.includes(':') ||
-			path.win32.isAbsolute(segment),
-	);
-
-	return unsafe ? null : path.join(root, ...segments);
-}
-
-/** Reads a binary file by its id, trying every storage root n8n may be configured with */
-async function readBinaryFileById(binaryId: string): Promise<Buffer | null> {
-	for (const root of binaryStorageRoots()) {
-		const candidate = binaryIdToPath(root, binaryId);
-		if (candidate === null) {
-			continue;
-		}
-		try {
-			return await fs.readFile(candidate);
-		} catch {
-			// Not stored under that root, keep looking
-		}
-	}
-
-	return null;
-}
-
 /** Turns the parsed content of the input file into the entities the lists are built from */
 function parseMindwtrDb(raw: unknown): IListSource {
 	const source = (Array.isArray(raw) ? { tasks: raw } : raw) as Partial<IDb> | null | undefined;
@@ -296,8 +235,9 @@ function parseJsonBuffer(buffer: Buffer): IListSource {
  * Turns the resolved "List Source" parameter into the entities to list.
  *
  * The editor resolves the parameter before the list is requested, so the value is
- * already the binary reference of the input item. Reading it back needs the file to
- * be stored on the same machine as n8n, which is the default setup.
+ * already the binary reference of the input item. The file bytes are only reachable
+ * when n8n keeps them inline (memory binary data mode, or an expression that points
+ * straight at the parsed data).
  */
 async function resolveListSourceValue(raw: unknown): Promise<IListSource> {
 	if (typeof raw === 'string') {
@@ -321,37 +261,22 @@ async function resolveListSourceValue(raw: unknown): Promise<IListSource> {
 	}
 
 	const reference = raw as IBinaryReference;
-	const rawId = typeof reference.id === 'string' ? reference.id.trim() : '';
 	const inlineData = typeof reference.data === 'string' ? reference.data : '';
+	const rawId = typeof reference.id === 'string' ? reference.id.trim() : '';
 
-	// Ids are prefixed with the storage mode, e.g. `filesystem-v2:workflows/.../binary_data/<uuid>`
-	const separator = rawId.indexOf(':');
-	const mode = separator === -1 ? '' : rawId.slice(0, separator);
-	const fileId = separator === -1 ? rawId : rawId.slice(separator + 1);
-
-	if (mode !== '' && mode !== 'filesystem' && mode !== 'filesystem-v2') {
-		// Only the memory mode keeps the payload next to its id. Every other mode
-		// stores the file where this node has no access to it.
-		if (mode === 'memory' && inlineData !== '') {
-			return parseJsonBuffer(Buffer.from(inlineData, 'base64'));
-		}
-		return {
-			error: `The input file is kept by n8n outside of its file system (mode "${mode}"), so no list can be built from it. Use the default "filesystem" binary data mode, or fill the ID fields by hand.`,
-		};
-	}
-
-	if (fileId !== '') {
-		const buffer = await readBinaryFileById(fileId);
-		if (buffer === null) {
-			return {
-				error: `The input file ("${fileId}") could not be read from n8n's binary storage. Run the workflow once to store it, or fill the ID fields by hand.`,
-			};
-		}
-		return parseJsonBuffer(buffer);
-	}
-
+	// Only some binary data modes keep the payload next to its id, e.g. `memory:<base64>`
 	if (inlineData !== '') {
 		return parseJsonBuffer(Buffer.from(inlineData, 'base64'));
+	}
+
+	if (rawId !== '') {
+		const mode = rawId.slice(0, rawId.indexOf(':') === -1 ? rawId.length : rawId.indexOf(':'));
+		return {
+			error:
+				`The input file ("${rawId}") is kept by n8n in its "${mode}" binary data mode, where this node cannot read it. ` +
+				'Set N8N_DEFAULT_BINARY_DATA_MODE=memory on n8n, or point the "List Source" parameter at the data itself ' +
+				'(e.g. `={{ $json }}` of the node that outputs the file content), or fill the ID fields by hand.',
+		};
 	}
 
 	return parseMindwtrDb(raw);
@@ -384,27 +309,6 @@ async function listFromInput(
 
 function filterByQuery<T extends { name: string }>(items: T[], query: string): T[] {
 	return query === '' ? items : items.filter((item) => item.name.toLowerCase().includes(query));
-}
-
-/** Modes of an ID field: picked from the list built out of the input file, or typed in */
-function resourceLocatorModes(searchListMethod: string): INodePropertyMode[] {
-	return [
-		{
-			displayName: 'From List',
-			name: 'list',
-			type: 'list',
-			typeOptions: {
-				searchListMethod,
-				searchable: true,
-			},
-		},
-		{
-			displayName: 'ID',
-			name: 'id',
-			type: 'string',
-			placeholder: 'ID or name',
-		},
-	];
 }
 
 export class Mindwtr implements INodeType {
@@ -603,7 +507,23 @@ export class Mindwtr implements INodeType {
 				name: 'taskId',
 				type: 'resourceLocator',
 				default: { mode: 'list', value: '' },
-				modes: resourceLocatorModes('searchTasks'),
+				modes: [
+					{
+						displayName: 'From List',
+						name: 'list',
+						type: 'list',
+						typeOptions: {
+							searchListMethod: 'searchTasks',
+							searchable: true,
+						},
+					},
+					{
+						displayName: 'ID',
+						name: 'id',
+						type: 'string',
+						placeholder: 'ID or name',
+					},
+				],
 				displayOptions: {
 					show: {
 						resource: ['task'],
@@ -632,7 +552,23 @@ export class Mindwtr implements INodeType {
 				name: 'projectId',
 				type: 'resourceLocator',
 				default: { mode: 'list', value: '' },
-				modes: resourceLocatorModes('searchProjects'),
+				modes: [
+					{
+						displayName: 'From List',
+						name: 'list',
+						type: 'list',
+						typeOptions: {
+							searchListMethod: 'searchProjects',
+							searchable: true,
+						},
+					},
+					{
+						displayName: 'ID',
+						name: 'id',
+						type: 'string',
+						placeholder: 'ID or name',
+					},
+				],
 				displayOptions: {
 					show: {
 						resource: ['task'],
@@ -703,7 +639,23 @@ export class Mindwtr implements INodeType {
 						name: 'projectId',
 						type: 'resourceLocator',
 						default: { mode: 'list', value: '' },
-						modes: resourceLocatorModes('searchProjects'),
+						modes: [
+							{
+								displayName: 'From List',
+								name: 'list',
+								type: 'list',
+								typeOptions: {
+									searchListMethod: 'searchProjects',
+									searchable: true,
+								},
+							},
+							{
+								displayName: 'ID',
+								name: 'id',
+								type: 'string',
+								placeholder: 'ID or name',
+							},
+						],
 						description: 'Filter by project ID or name, as found in the file on input',
 					},
 					{
@@ -754,7 +706,23 @@ export class Mindwtr implements INodeType {
 						name: 'projectId',
 						type: 'resourceLocator',
 						default: { mode: 'list', value: '' },
-						modes: resourceLocatorModes('searchProjects'),
+						modes: [
+							{
+								displayName: 'From List',
+								name: 'list',
+								type: 'list',
+								typeOptions: {
+									searchListMethod: 'searchProjects',
+									searchable: true,
+								},
+							},
+							{
+								displayName: 'ID',
+								name: 'id',
+								type: 'string',
+								placeholder: 'ID or name',
+							},
+						],
 						description:
 							'Project ID or name to associate with the task, as found in the file on input',
 					},
@@ -813,7 +781,23 @@ export class Mindwtr implements INodeType {
 						name: 'projectId',
 						type: 'resourceLocator',
 						default: { mode: 'list', value: '' },
-						modes: resourceLocatorModes('searchProjects'),
+						modes: [
+							{
+								displayName: 'From List',
+								name: 'list',
+								type: 'list',
+								typeOptions: {
+									searchListMethod: 'searchProjects',
+									searchable: true,
+								},
+							},
+							{
+								displayName: 'ID',
+								name: 'id',
+								type: 'string',
+								placeholder: 'ID or name',
+							},
+						],
 						description:
 							'Project ID or name associated with the task, as found in the file on input. Leave empty to detach the task from its project.',
 					},
@@ -856,7 +840,23 @@ export class Mindwtr implements INodeType {
 				name: 'projectId',
 				type: 'resourceLocator',
 				default: { mode: 'list', value: '' },
-				modes: resourceLocatorModes('searchProjects'),
+				modes: [
+					{
+						displayName: 'From List',
+						name: 'list',
+						type: 'list',
+						typeOptions: {
+							searchListMethod: 'searchProjects',
+							searchable: true,
+						},
+					},
+					{
+						displayName: 'ID',
+						name: 'id',
+						type: 'string',
+						placeholder: 'ID or name',
+					},
+				],
 				displayOptions: {
 					show: {
 						resource: ['project'],
@@ -964,7 +964,23 @@ export class Mindwtr implements INodeType {
 				name: 'taskId',
 				type: 'resourceLocator',
 				default: { mode: 'list', value: '' },
-				modes: resourceLocatorModes('searchTasks'),
+				modes: [
+					{
+						displayName: 'From List',
+						name: 'list',
+						type: 'list',
+						typeOptions: {
+							searchListMethod: 'searchTasks',
+							searchable: true,
+						},
+					},
+					{
+						displayName: 'ID',
+						name: 'id',
+						type: 'string',
+						placeholder: 'ID or name',
+					},
+				],
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
@@ -979,7 +995,23 @@ export class Mindwtr implements INodeType {
 				name: 'subtaskId',
 				type: 'resourceLocator',
 				default: { mode: 'list', value: '' },
-				modes: resourceLocatorModes('searchSubtasks'),
+				modes: [
+					{
+						displayName: 'From List',
+						name: 'list',
+						type: 'list',
+						typeOptions: {
+							searchListMethod: 'searchSubtasks',
+							searchable: true,
+						},
+					},
+					{
+						displayName: 'ID',
+						name: 'id',
+						type: 'string',
+						placeholder: 'ID or name',
+					},
+				],
 				displayOptions: {
 					show: {
 						resource: ['subtask'],
@@ -1026,7 +1058,7 @@ export class Mindwtr implements INodeType {
 				type: 'string',
 				default: '={{ $binary.data }}',
 				description:
-					'Binary JSON file used to fill the "From list" mode of the ID fields. Defaults to the "data" property of the input item; point it to another binary property if your file is attached under a different name.',
+					'Binary JSON file used to fill the "From list" mode of the ID fields. Defaults to the "data" property of the input item; point it to another binary property if your file is attached under a different name, or straight at the parsed content of the input item when it is already exposed as JSON data.',
 			},
 			{
 				displayName: 'Binary Property',
