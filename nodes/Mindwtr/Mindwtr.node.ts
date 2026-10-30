@@ -1,5 +1,4 @@
 import type {
-	IBinaryData,
 	IDataObject,
 	IExecuteFunctions,
 	ILoadOptionsFunctions,
@@ -89,7 +88,7 @@ function findEntityMatches<T extends INamedEntity>(entities: T[], reference: str
 }
 
 /**
- * Resolves a reference that can either be an ID or a name taken from the binary file
+ * Resolves a reference that can either be an ID or a name taken from the input data
  * on input (exact ID, then exact name, then a single name containing the reference).
  *
  * Returns `undefined` when the reference is empty, so the caller can fall back to
@@ -184,12 +183,6 @@ function toReference(value: unknown): string {
 		}
 	}
 	return '';
-}
-
-/** Binary reference, as the editor resolves it from an expression such as `={{ $binary.data }}` */
-interface IBinaryReference {
-	data?: unknown;
-	id?: unknown;
 }
 
 type IListSource = { db: IDb } | { error: string };
@@ -325,20 +318,11 @@ function parseMindwtrDb(raw: unknown): IListSource {
 	};
 }
 
-function parseJsonBuffer(buffer: Buffer): IListSource {
-	try {
-		return parseMindwtrDb(JSON.parse(buffer.toString('utf8')));
-	} catch {
-		return { error: 'The input data could not be read as JSON.' };
-	}
-}
-
 /**
  * Turns the resolved "List Source" parameter into the entities to list.
  *
  * The editor resolves the parameter before the list is requested, so the value is
- * already the input data of the item — the parsed JSON when it is exposed as such.
- * A binary reference is still accepted, as long as n8n keeps the bytes inline.
+ * already the parsed data of the input item.
  */
 async function resolveListSourceValue(raw: unknown): Promise<IListSource> {
 	if (typeof raw === 'string') {
@@ -355,30 +339,6 @@ async function resolveListSourceValue(raw: unknown): Promise<IListSource> {
 
 	if (raw === null || typeof raw !== 'object') {
 		return { error: LIST_SOURCE_NOT_SET };
-	}
-
-	if (Array.isArray(raw)) {
-		return parseMindwtrDb(raw);
-	}
-
-	const reference = raw as IBinaryReference;
-	const inlineData = typeof reference.data === 'string' ? reference.data : '';
-	const rawId = typeof reference.id === 'string' ? reference.id.trim() : '';
-
-	// A binary reference, when the data has not been extracted into JSON yet
-	if (inlineData !== '' && rawId !== '' && !Array.isArray((raw as Partial<IDb>).tasks)) {
-		const separator = rawId.indexOf(':');
-		const mode = separator === -1 ? '' : rawId.slice(0, separator);
-
-		if (mode !== '' && mode !== 'filesystem' && mode !== 'filesystem-v2') {
-			return parseJsonBuffer(Buffer.from(inlineData, 'base64'));
-		}
-
-		return {
-			error:
-				`The input file ("${rawId}") is kept by n8n in its "${mode}" binary data mode, where this node cannot read it. ` +
-				'Extract the JSON with a node such as "Extract From File" and connect it to this node, or fill the ID fields by hand.',
-		};
 	}
 
 	return parseMindwtrDb(raw);
@@ -421,7 +381,7 @@ export class Mindwtr implements INodeType {
 		group: ['transform'],
 		version: [1],
 		subtitle: '={{$parameter["operation"] + ": " + $parameter["resource"]}}',
-		description: 'Manage Mindwtr tasks, projects, and subtasks via binary JSON file',
+		description: 'Manage Mindwtr tasks, projects, and subtasks from JSON data',
 		defaults: {
 			name: 'Mindwtr',
 		},
@@ -1152,7 +1112,7 @@ export class Mindwtr implements INodeType {
 			},
 
 			// ========================================
-			// OPTIONS / FILE
+			// OPTIONS
 			// ========================================
 			{
 				displayName: 'List Source',
@@ -1161,14 +1121,6 @@ export class Mindwtr implements INodeType {
 				default: '={{ $json }}',
 				description:
 					'Input data used to fill the "From list" mode of the ID fields. Defaults to the whole input item; point it to a property of that item when the data is nested, e.g. the "data" property returned by the "Extract From File" node.',
-			},
-			{
-				displayName: 'Binary Property',
-				name: 'binaryPropertyName',
-				type: 'string',
-				default: 'data',
-				description:
-					'Name of the binary property to read the JSON file from, and to write the updated file back to. Only used when a file is still attached to the input item; ignored when the data already comes as JSON.',
 			},
 		],
 	};
@@ -1244,30 +1196,22 @@ export class Mindwtr implements INodeType {
 		const items = this.getInputData();
 		const returnData: INodeExecutionData[] = [];
 
-		// Shared DB state loaded once from binary data of the first item (or cached)
+		// Shared DB state, loaded once from the input data of the first item (then cached)
 		let db: IDb | null = null;
-		let sharedBinaryData!: IBinaryData;
 
 		for (let i = 0; i < items.length; i++) {
 			try {
 				const resource = this.getNodeParameter('resource', i) as string;
 				const operation = this.getNodeParameter('operation', i) as string;
-				const binaryPropertyName = this.getNodeParameter('binaryPropertyName', i, 'data') as string;
 
 				const item = items[i];
 
 				if (!db) {
-					if (item.binary && item.binary[binaryPropertyName]) {
-						const buffer = await this.helpers.getBinaryDataBuffer(i, binaryPropertyName);
-						db = JSON.parse(buffer.toString('utf8')) as IDb;
-					} else {
-						// No binary file: the data has been extracted into JSON upstream
-						const parsed = parseMindwtrDb(item.json);
-						if ('error' in parsed) {
-							throw new NodeOperationError(this.getNode(), parsed.error, { itemIndex: i });
-						}
-						db = parsed.db;
+					const parsed = parseMindwtrDb(item.json);
+					if ('error' in parsed) {
+						throw new NodeOperationError(this.getNode(), parsed.error, { itemIndex: i });
 					}
+					db = parsed.db;
 					db.tasks = db.tasks || [];
 					db.projects = db.projects || [];
 					db.settings = db.settings || {};
@@ -1580,20 +1524,10 @@ export class Mindwtr implements INodeType {
 					}
 				}
 
-				const jsonString = JSON.stringify(db, null, 2);
-				sharedBinaryData = await this.helpers.prepareBinaryData(
-					Buffer.from(jsonString, 'utf8'),
-					'data.json',
-					'application/json'
-				);
-
-				item.json = { ...db };
-				item.binary = item.binary || {};
-				item.binary[binaryPropertyName] = sharedBinaryData;
+				item.json = { ...db } as IDataObject;
 
 				returnData.push({
 					json: item.json,
-					binary: item.binary,
 					pairedItem: { item: i },
 				});
 			} catch (error) {
