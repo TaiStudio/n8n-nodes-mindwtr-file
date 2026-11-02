@@ -185,7 +185,7 @@ function toReference(value: unknown): string {
 	return '';
 }
 
-type IListSource = { db: IDb } | { error: string };
+type IListSource = { db: IDb; path: JsonPath | null } | { error: string };
 
 const LIST_SOURCE_NOT_SET =
 	'The list could not read the input data. Set the "List Source" parameter below to the parsed data of the input item, e.g. `={{ $json }}`, then open the list again.';
@@ -202,10 +202,15 @@ const LIST_SOURCE_WRAPPER_KEYS = ['data', 'json', 'body', 'result', 'output', 'c
 /** How deep wrappers are followed before giving up on the input data */
 const MAX_WRAPPER_DEPTH = 3;
 
+/** Where the data sits inside the input item: a list of keys and indexes */
+type JsonPath = Array<string | number>;
+
 interface ICollectedEntities {
 	tasks: unknown[];
 	projects: unknown[];
 	settings: IDataObject;
+	/** Location of the data inside the input item, `null` when nothing was found */
+	path: JsonPath | null;
 }
 
 function isNamedEntity(value: unknown): value is INamedEntity {
@@ -221,26 +226,49 @@ function isNamedEntity(value: unknown): value is INamedEntity {
  * Finds the tasks and projects inside whatever the input item holds: the data
  * itself, a bare list of tasks, a single task, or a payload nested under a
  * common key such as the `data` returned by the "Extract From File" node.
+ *
+ * Also reports where the data was found (`path`), so the output can be rebuilt
+ * in the exact same shape as the input.
  */
-function collectEntities(value: unknown, depth = 0): ICollectedEntities {
+function collectEntities(value: unknown, depth = 0, path: JsonPath = []): ICollectedEntities {
 	if (depth > MAX_WRAPPER_DEPTH || value === null || typeof value !== 'object') {
-		return { tasks: [], projects: [], settings: {} };
+		return { tasks: [], projects: [], settings: {}, path: null };
 	}
 
 	if (Array.isArray(value)) {
 		// Either a bare list of entities, or one wrapper per input item
-		const collected: ICollectedEntities = { tasks: [], projects: [], settings: {} };
-		for (const entry of value) {
-			const inner = collectEntities(entry, depth + 1);
+		const collected: ICollectedEntities = { tasks: [], projects: [], settings: {}, path: null };
+		let contributorPath: JsonPath | null = null;
+		let contributors = 0;
+
+		for (let index = 0; index < value.length; index++) {
+			const inner = collectEntities(value[index], depth + 1, [...path, index]);
 			collected.tasks.push(...inner.tasks);
 			collected.projects.push(...inner.projects);
 			if (Object.keys(collected.settings).length === 0) {
 				collected.settings = inner.settings;
 			}
+			if (inner.path !== null) {
+				contributors++;
+				if (contributorPath === null) {
+					contributorPath = inner.path;
+				}
+			}
 		}
 
 		if (collected.tasks.length === 0 && value.length > 0 && value.every(isNamedEntity)) {
 			collected.tasks.push(...value);
+		}
+
+		// Where the data has to be written back: a bare list of entities stays a
+		// list, a single entry holding everything keeps being pointed at, and
+		// anything else collapses onto the list itself so nothing is left behind
+		if (value.length > 0 && value.every(isNamedEntity)) {
+			collected.path = [...path];
+		} else if (contributors === 1 && contributorPath !== null) {
+			collected.path = contributorPath;
+		} else if (collected.tasks.length > 0 || collected.projects.length > 0) {
+			collected.path = [...path];
 		}
 
 		return collected;
@@ -258,25 +286,26 @@ function collectEntities(value: unknown, depth = 0): ICollectedEntities {
 			tasks: record.tasks as unknown[],
 			projects: (record.projects as unknown[]) ?? [],
 			settings,
+			path: [...path],
 		};
 	}
 
 	// A single task or project on its own
 	if (isNamedEntity(record)) {
-		return { tasks: [record], projects: [], settings: {} };
+		return { tasks: [record], projects: [], settings: {}, path: [...path] };
 	}
 
 	// Something wrapping the data, e.g. `{ data: … }` from "Extract From File"
 	for (const key of LIST_SOURCE_WRAPPER_KEYS) {
 		if (key in record) {
-			const inner = collectEntities(unwrapJsonValue(record[key]), depth + 1);
+			const inner = collectEntities(unwrapJsonValue(record[key]), depth + 1, [...path, key]);
 			if (inner.tasks.length > 0 || inner.projects.length > 0) {
 				return inner;
 			}
 		}
 	}
 
-	return { tasks: [], projects: [], settings: {} };
+	return { tasks: [], projects: [], settings: {}, path: null };
 }
 
 /** A node upstream may hand the data over as a JSON string rather than an object */
@@ -315,7 +344,102 @@ function parseMindwtrDb(raw: unknown): IListSource {
 			projects: collected.projects as IProject[],
 			settings: collected.settings,
 		},
+		path: collected.path,
 	};
+}
+
+/**
+ * Writes the data back into the node it was read from, keeping every other key
+ * the input had at that place, so no input key is ever lost.
+ */
+function mergeDbIntoNode(originalNode: unknown, db: IDb): unknown {
+	// The input kept the data as a JSON string: hand it back the same way
+	if (typeof originalNode === 'string') {
+		const parsed = unwrapJsonValue(originalNode);
+		return typeof parsed === 'string'
+			? ({ ...db } as IDataObject)
+			: JSON.stringify(mergeDbIntoNode(parsed, db));
+	}
+
+	const { settings, ...data } = db;
+	const settingsEmpty = Object.keys(settings).length === 0;
+
+	// A bare list of entities: keep it a list as long as the data fits in one
+	if (Array.isArray(originalNode)) {
+		if (db.projects.length === 0 && settingsEmpty) {
+			return db.tasks;
+		}
+		const rebuilt = settingsEmpty ? { ...data } : { ...data, settings };
+		return rebuilt as unknown as IDataObject;
+	}
+
+	const source =
+		originalNode !== null && typeof originalNode === 'object'
+			? (originalNode as IDataObject)
+			: {};
+
+	const merged = { ...source, ...data } as unknown as IDataObject;
+
+	// Keep the input's shape: `settings` only comes back when the input had it,
+	// or when there is something to carry over
+	if ('settings' in source || !settingsEmpty) {
+		merged.settings = settings;
+	}
+
+	return merged;
+}
+
+/**
+ * Rebuilds the output so that every operation hands back data in the exact
+ * same JSON shape as the input: the same keys (a wrapper such as `data` stays
+ * in place), the extra keys of the input kept untouched, and only the data
+ * itself updated.
+ */
+function buildOutputJson(
+	original: IDataObject | null,
+	path: JsonPath | null,
+	db: IDb,
+): IDataObject {
+	if (original === null) {
+		return { ...db } as IDataObject;
+	}
+
+	if (path === null) {
+		return mergeDbIntoNode(original, db) as IDataObject;
+	}
+
+	// The node the data was read from, so its own keys survive the round trip
+	let node: unknown = original;
+	for (const segment of path) {
+		if (node === null || typeof node !== 'object') {
+			node = undefined;
+			break;
+		}
+		node = Array.isArray(node)
+			? node[Number(segment)]
+			: (node as Record<string, unknown>)[segment as string];
+	}
+
+	const merged = mergeDbIntoNode(node, db);
+
+	// Copy only the containers on the way down, everything else is left alone
+	const write = (container: unknown, remaining: JsonPath): unknown => {
+		if (remaining.length === 0) {
+			return merged;
+		}
+		const [head, ...tail] = remaining;
+		if (Array.isArray(container)) {
+			const copy = [...container];
+			const index = Number(head);
+			copy[index] = write(copy[index], tail);
+			return copy;
+		}
+		const copy = { ...(container as Record<string, unknown>) };
+		copy[head as string] = write(copy[head as string], tail);
+		return copy;
+	};
+
+	return write(original, path) as IDataObject;
 }
 
 /**
@@ -1246,6 +1370,10 @@ export class Mindwtr implements INodeType {
 
 		// Shared DB state, loaded once from the input data of the first item (then cached)
 		let db: IDb | null = null;
+		// Shape of the input data the database was read from, so that every
+		// operation hands back an output in that exact same shape
+		let sourceJson: IDataObject | null = null;
+		let sourcePath: JsonPath | null = null;
 
 		for (let i = 0; i < items.length; i++) {
 			try {
@@ -1263,7 +1391,13 @@ export class Mindwtr implements INodeType {
 					db.tasks = db.tasks || [];
 					db.projects = db.projects || [];
 					db.settings = db.settings || {};
+					sourceJson = item.json;
+					sourcePath = parsed.path;
 				}
+
+				// What the output holds: the whole database by default, a filtered
+				// view of it for the "Get Many" operations
+				let resultDb: IDb = db;
 
 				const now = new Date().toISOString();
 
@@ -1294,13 +1428,7 @@ export class Mindwtr implements INodeType {
 							tasks = tasks.slice(0, limit);
 						}
 
-						for (const task of tasks) {
-							returnData.push({
-								json: task as unknown as IDataObject,
-								pairedItem: { item: i },
-							});
-						}
-						continue;
+						resultDb = { ...db, tasks };
 					} else if (operation === 'create') {
 						const title = this.getNodeParameter('title', i) as string;
 						const additionalFields = this.getNodeParameter('additionalFields', i) as IDataObject;
@@ -1436,13 +1564,7 @@ export class Mindwtr implements INodeType {
 							projects = projects.slice(0, limit);
 						}
 
-						for (const project of projects) {
-							returnData.push({
-								json: project as unknown as IDataObject,
-								pairedItem: { item: i },
-							});
-						}
-						continue;
+						resultDb = { ...db, projects };
 					} else if (operation === 'create') {
 						const title = this.getNodeParameter('title', i) as string;
 						const additionalFields = this.getNodeParameter('additionalFields', i) as IDataObject;
@@ -1496,14 +1618,8 @@ export class Mindwtr implements INodeType {
 					task.subtasks = task.subtasks || [];
 
 					if (operation === 'getAll') {
-						const subtasks = task.subtasks || [];
-						for (const subtask of subtasks) {
-							returnData.push({
-								json: subtask as unknown as IDataObject,
-								pairedItem: { item: i },
-							});
-						}
-						continue;
+						// The selected task, with its subtasks, is what was asked for
+						resultDb = { ...db, tasks: [task] };
 					} else if (operation === 'create') {
 						const title = this.getNodeParameter('title', i) as string;
 						const newSubtask: ISubtask = {
@@ -1572,18 +1688,22 @@ export class Mindwtr implements INodeType {
 					}
 				}
 
-				item.json = { ...db } as IDataObject;
-
+				// Every operation hands back the input's own JSON shape, with the
+				// data updated in place
 				returnData.push({
-					json: item.json,
+					json: buildOutputJson(sourceJson, sourcePath, resultDb),
 					pairedItem: { item: i },
 				});
 			} catch (error) {
 				if (this.continueOnFail()) {
+					const message = (error as Error).message;
 					returnData.push({
-						json: {
-							error: (error as Error).message,
-						},
+						// Keep the input's shape too, so a failed run never replaces
+						// the data with a bare error object
+						json:
+							db !== null && sourceJson !== null
+								? { ...buildOutputJson(sourceJson, sourcePath, db), error: message }
+								: { error: message },
 						pairedItem: { item: i },
 					});
 					continue;

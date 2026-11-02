@@ -28,7 +28,25 @@ Follow the [official installation guide](https://docs.n8n.io/integrations/commun
 The Mindwtr node operates on a JSON file passed via an n8n binary property (default: `data`). 
 1. Read a JSON file (e.g. from disk, S3, or HTTP) into binary data.
 2. Pass it through the Mindwtr node to perform operations (create task, update project, validate subtask, etc.).
-3. The node updates the JSON database structure and outputs both the updated JSON object and the updated file as binary data for subsequent nodes in your workflow.
+3. The node outputs the updated JSON object, ready to be written back to a file by the next node in your workflow.
+
+### Output format
+
+Every operation — including **Get Many** — returns the data in the **exact same JSON shape as the input**:
+
+- the same top-level keys: a wrapper such as `data` (from the "Extract From File" node) stays in place, and the data is written back where it was found;
+- every extra key of the input (metadata, etc.) is kept untouched;
+- only the data itself (`tasks`, `projects` and `settings`) is updated;
+- `settings` is only present when the input had it.
+
+The output can therefore always be saved back to a `.json` file as-is, whatever operation was run.
+
+**Get Many** returns that same shape with the list reduced to the entries that match the filters and limit:
+
+- **Task / Project**: `tasks` (resp. `projects`) only contains the matching entries, the other list stays complete for reference;
+- **Subtask**: `tasks` only contains the selected parent task with its subtasks.
+
+If an operation fails while "Always Output Data" is enabled, the input shape is preserved as well and an `error` key is added, so a failed run never replaces the data with a bare error object.
 
 ### Referencing items by ID or by name
 
