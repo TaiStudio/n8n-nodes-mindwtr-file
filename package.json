@@ -9,12 +9,22 @@
     "homepage": "https://github.com/TaiStudio/n8n-nodes-mindwtr-file#readme",
     "keywords": [
         "n8n-community-node-package",
+        "n8n",
+        "n8n-node",
         "mindwtr",
-        "file"
+        "task-management",
+        "project-management",
+        "subtasks",
+        "todo",
+        "json",
+        "file",
+        "productivity",
+        "workflow"
     ],
     "author": {
+        "url": "https://taistudio.fr",
         "name": "Tai Studio",
-        "email": "tai.studio@outlook.fr"
+        "email": "contact@taistudio.fr"
     },
     "repository": {
         "type": "git",

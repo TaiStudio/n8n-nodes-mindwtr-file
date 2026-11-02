@@ -1,103 +1,304 @@
-# n8n-nodes-mindwtr-file
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="./nodes/Mindwtr/mindwtr.dark.svg">
+    <img src="./nodes/Mindwtr/mindwtr.svg" width="76" alt="Mindwtr node icon" />
+  </picture>
+</p>
 
-This is an n8n community node package that allows you to manage **Mindwtr** tasks, projects, and subtasks directly within your n8n workflows using a JSON database file.
+<h1 align="center">n8n-nodes-mindwtr-file</h1>
 
-[n8n](https://n8n.io/) is a [fair-code licensed](https://docs.n8n.io/sustainable-use-license/) workflow automation platform.
+<p align="center">
+  <strong>Manage Mindwtr tasks, projects and subtasks from your n8n workflows —<br/>no API, no credentials, just a plain JSON file.</strong>
+</p>
+
+<p align="center">
+  <a href="https://www.npmjs.com/package/@taistudio/n8n-nodes-mindwtr-file"><img src="https://img.shields.io/npm/v/%40taistudio%2Fn8n-nodes-mindwtr-file?logo=npm&label=npm" alt="npm version" /></a>
+  <a href="https://www.npmjs.com/package/@taistudio/n8n-nodes-mindwtr-file"><img src="https://img.shields.io/npm/dm/%40taistudio%2Fn8n-nodes-mindwtr-file?logo=npm&label=downloads" alt="npm downloads" /></a>
+  <a href="https://docs.n8n.io/integrations/community-nodes/"><img src="https://img.shields.io/badge/n8n-community%20node-E1306C?logo=n8n&logoColor=fff" alt="n8n community node" /></a>
+  <img src="https://img.shields.io/badge/n8n-Cloud%20compatible-6D00CC?logo=n8n&logoColor=fff" alt="n8n Cloud compatible" />
+  <a href="#license"><img src="https://img.shields.io/badge/license-MIT-2563eb.svg" alt="license MIT" /></a>
+</p>
+
+<p align="center">
+  <a href="README.md"><strong>English</strong></a> ·
+  <a href="README.fr.md">Français</a>
+</p>
+
+<p align="center">
+  <a href="#about">About</a> ·
+  <a href="#installation">Installation</a> ·
+  <a href="#getting-started">Getting started</a> ·
+  <a href="#operations-reference">Operations</a> ·
+  <a href="#development">Development</a>
+</p>
 
 ---
 
-## Features
+## About
 
-Manage your structured Mindwtr JSON database file across three main resources:
+**Mindwtr File** is an n8n community node that turns a structured JSON document — the Mindwtr database — into a full task-management surface inside your workflows.
 
-- **Task**: Create, update, delete, retrieve, validate (complete), attach to project, and detach from project.
-- **Project**: Create, update, and delete projects (with status and color support).
-- **Subtask**: Create, update, delete, retrieve, and validate subtasks within specific tasks.
+Instead of calling a remote service, the node reads the database **from the data already flowing in your workflow** (a file read from disk, S3, HTTP, a webhook payload…), applies the operation you selected, and hands the result back **in the exact same shape** — ready to be written straight back to a `.json` file.
+
+- **Three resources** — `Task`, `Project` and `Subtask`, with 16 operations in total.
+- **Zero credentials** — everything is processed locally in the workflow.
+- **Cloud compatible** — strict mode enabled, follows the n8n Cloud community-node rules.
+- **Usable as a tool** — plug the node directly into an AI Agent's tool list.
+- **Round-trip safe** — whatever goes in comes back with the same structure, only the data is updated.
+- **Human friendly** — reference any item by its ID *or* by its name (`Website Redesign`, `redesign`, `p1`…).
+
+---
 
 ## Installation
 
-Follow the [official installation guide](https://docs.n8n.io/integrations/community-nodes/installation/) for n8n community nodes:
+Follow the [official n8n community nodes guide](https://docs.n8n.io/integrations/community-nodes/installation/):
 
-1. Go to **Settings > Community Nodes** in your n8n instance.
+1. Open **Settings → Community Nodes** in your n8n instance.
 2. Select **Install**.
-3. Enter `@taistudio/n8n-nodes-mindwtr-file` into the npm package name field.
-4. Accept the risk disclaimer and click **Install**.
+3. Enter `@taistudio/n8n-nodes-mindwtr-file`.
+4. Accept the risk disclaimer and confirm **Install**.
 
-## How It Works
+<details>
+<summary><strong>Install from the command line</strong></summary>
 
-The Mindwtr node operates on a JSON file passed via an n8n binary property (default: `data`). 
-1. Read a JSON file (e.g. from disk, S3, or HTTP) into binary data.
-2. Pass it through the Mindwtr node to perform operations (create task, update project, validate subtask, etc.).
-3. The node outputs the updated JSON object, ready to be written back to a file by the next node in your workflow.
+```bash
+# Docker / self-hosted default custom nodes folder
+npm install @taistudio/n8n-nodes-mindwtr-file --prefix /home/node/.n8n
 
-### Output format
+# or, inside the n8n container
+n8n install:community-node @taistudio/n8n-nodes-mindwtr-file
+```
 
-Every operation — including **Get Many** — returns the data in the **exact same JSON shape as the input**:
+Then restart n8n and look for **Mindwtr** in the node panel.
+</details>
 
-- the same top-level keys: a wrapper such as `data` (from the "Extract From File" node) stays in place, and the data is written back where it was found;
+---
+
+## Getting started
+
+### 1 · The data format
+
+The node operates on a Mindwtr JSON document. A minimal, complete example:
+
+```json
+{
+  "tasks": [
+    {
+      "id": "t3",
+      "title": "Draft project proposal",
+      "status": "next",
+      "tags": ["urgent"],
+      "contexts": ["@work"],
+      "projectId": "p1",
+      "dueDate": "2025-11-26T12:00:00.000Z",
+      "createdAt": "2025-11-24T09:30:00.000Z",
+      "updatedAt": "2025-11-24T09:30:00.000Z",
+      "subtasks": [
+        { "id": "st_1", "title": "Outline the goals", "status": "completed" }
+      ]
+    },
+    {
+      "id": "t1",
+      "title": "Call Mom",
+      "status": "inbox",
+      "contexts": ["@home"]
+    }
+  ],
+  "projects": [
+    { "id": "p1", "title": "Website Redesign", "status": "active", "color": "#3b82f6" }
+  ],
+  "settings": {}
+}
+```
+
+| Key         | Required | Notes                                                        |
+| ----------- | :------: | ------------------------------------------------------------ |
+| `tasks`     |    ✅    | Every task needs an `id` and a `title`.                      |
+| `projects`  |    ✅    | Every project needs an `id` and a `title`.                   |
+| `settings`  |    ⬜    | Free-form object, preserved as-is when present.              |
+| `subtasks`  |    ⬜    | Nested inside their parent task.                             |
+| `projectId` |    ⬜    | Links a task to a project.                                   |
+
+> The node is tolerant about **where** the data sits: a top-level document, a `{ "data": … }` wrapper (as returned by *Extract From File*), a bare list of tasks, or a single task are all detected automatically — up to 3 levels of nesting.
+
+### 2 · The workflow pattern
+
+```mermaid
+flowchart LR
+    A[["📄 data.json"]] --> B[Read Binary File]
+    B --> C[Extract From File]
+    C --> D{{"Mindwtr<br/>create · update · delete<br/>get many · validate"}}
+    D --> E[Convert To File]
+    E --> F[Write Binary Files]
+    F --> G[["💾 data.json"]]
+```
+
+1. **Read** the JSON file into an n8n binary property (default: `data`).
+2. **Transform** it with the Mindwtr node — create a task, update a project, validate a subtask…
+3. **Write** the output back to a file with the next node. The JSON can be saved as-is, whatever operation was run.
+
+### 3 · A concrete example
+
+> *“A webhook receives a new action item → store it in the Mindwtr file.”*
+
+| # | Node                     | Configuration                                                            |
+| - | ------------------------ | ------------------------------------------------------------------------ |
+| 1 | **Webhook**              | POST `/new-task`, method `POST`                                          |
+| 2 | **Mindwtr**              | Resource `Task` → Operation `Create`, Title `={{ $json.body.title }}`     |
+| 3 | **Convert To File**      | Operation *To JSON*                                                       |
+| 4 | **Write Binary Files**   | File Name `data.json`, Property `data`                                   |
+
+Every run appends the new task (with an auto-generated `id` and `createdAt` / `updatedAt` timestamps) and returns the whole updated database.
+
+---
+
+## Output guarantees
+
+### Same shape in, same shape out
+
+Every operation — including **Get Many** — returns data in the **exact same JSON shape as the input**:
+
+- the same top-level keys: a wrapper such as `data` (from *Extract From File*) stays in place, and the data is written back where it was found;
 - every extra key of the input (metadata, etc.) is kept untouched;
 - only the data itself (`tasks`, `projects` and `settings`) is updated;
-- `settings` is only present when the input had it.
+- `settings` is only present when the input had it;
+- data provided as a JSON string is handed back as a JSON string.
 
-The output can therefore always be saved back to a `.json` file as-is, whatever operation was run.
+### Get Many returns a filtered view
 
-**Get Many** returns that same shape with the list reduced to the entries that match the filters and limit:
+**Get Many** keeps that same shape, with the list reduced to the entries matching the filters and limit:
 
-- **Task / Project**: `tasks` (resp. `projects`) only contains the matching entries, the other list stays complete for reference;
-- **Subtask**: `tasks` only contains the selected parent task with its subtasks.
+| Resource | Result                                                                                                     |
+| -------- | ---------------------------------------------------------------------------------------------------------- |
+| Task     | `tasks` only contains the matching entries, `projects` stays complete for reference.                       |
+| Project  | `projects` only contains the matching entries, `tasks` stays complete for reference.                       |
+| Subtask  | `tasks` only contains the selected parent task, with its `subtasks`.                                        |
 
-If an operation fails while "Always Output Data" is enabled, the input shape is preserved as well and an `error` key is added, so a failed run never replaces the data with a bare error object.
+### Failures never destroy your data
 
-### Referencing items by ID or by name
+If an operation fails while **Always Output Data** is enabled, the input shape is preserved and an `error` key is added — a failed run never replaces your database with a bare error object.
 
-Every field that expects an ID (task, project or subtask) also accepts the **name** as found in the JSON file on input:
+---
 
-- exact name, case-insensitive (e.g. `website redesign`)
-- or a single name containing what you typed (e.g. `redesign` → `Website Redesign`)
-- the exact ID keeps working as before
-- leaving the field empty still auto-detects the item from the input data
+## Referencing items by ID **or** by name
 
-If the name is unknown or matches several items, the node fails with an error that lists every available name together with its ID, so the correct reference is always easy to find.
+Every field that expects an ID (task, project or subtask) also accepts the **name** as found in the JSON file:
 
-## Operations & Parameters
+| You type                                | Resolves to                                       |
+| --------------------------------------- | ------------------------------------------------- |
+| `p1`                                    | the exact ID                                      |
+| `website redesign`                      | exact name, case-insensitive                       |
+| `redesign`                              | the single name containing what you typed          |
+| *(empty)*                               | auto-detection from the input item                 |
+| several matches / unknown name          | an error listing every available name **and** ID   |
 
-### 1. Task
-- **Create**: Add a new task with title, status, contexts, tags, due date, and optional project ID or name.
-- **Update**: Modify task title, status, project association, contexts, tags, or due date.
-- **Delete**: Remove a task by its ID or name.
-- **Get Many**: Retrieve tasks with filtering options (by status or project ID or name) and limit controls.
-- **Validate**: Mark a task as completed or incomplete.
-- **Attach to Project**: Assign a task to an existing project.
-- **Detach From Project**: Remove project association from a task.
+So a failed run always doubles as a list of what's available — no need to open the file to find the right reference.
 
-### 2. Project
-- **Create**: Add a new project with title, status, and hex color code.
-- **Update**: Modify project title, status, or color.
-- **Delete**: Remove a project by its ID or name (and unassign any associated tasks).
+**From List pickers** — every locator also offers a searchable *From List* mode, populated from the data present on the node's input (100 entries per page, filterable as you type). If your data is nested, point the **List Source** option at the right property (default: `={{ $json }}`, e.g. `={{ $json.data }}` for an *Extract From File* payload).
 
-### 3. Subtask
-- **Create**: Add a subtask to a specific task.
-- **Update**: Modify subtask title.
-- **Delete**: Remove a subtask by ID or name.
-- **Get Many**: Retrieve all subtasks for a given task.
-- **Validate**: Mark a subtask as completed or incomplete.
+---
 
-## Credentials
+## Operations reference
 
-This node does not require external API credentials, as it processes local or workflow-provided JSON files directly.
+### Task
+
+| Operation            | What it does                            | Parameters                                                                     |
+| -------------------- | --------------------------------------- | ------------------------------------------------------------------------------ |
+| **Create**           | Add a new task                          | `Title`* · Status · Tags · Contexts · Due Date · Project                       |
+| **Update**           | Modify an existing task                 | `Task`* · Title · Status · Project · Tags · Contexts · Due Date                |
+| **Delete**           | Remove a task                           | `Task`*                                                                        |
+| **Get Many**         | Retrieve tasks                          | Filters: Status, Project · Return All / Limit                                  |
+| **Validate**         | Complete or un-complete a task          | `Task`* · `Completed`                                                          |
+| **Attach to Project**| Assign a task to a project              | `Task`* · `Project`*                                                           |
+| **Detach From Project** | Remove the project association       | `Task`*                                                                        |
+
+### Project
+
+| Operation      | What it does                              | Parameters                                   |
+| -------------- | ----------------------------------------- | -------------------------------------------- |
+| **Create**     | Add a new project                         | `Title`* · Status · Color                     |
+| **Update**     | Modify an existing project                | `Project`* · Title · Status · Color           |
+| **Delete**     | Remove a project (its tasks are detached) | `Project`*                                    |
+| **Get Many**   | Retrieve projects                         | Return All / Limit                            |
+
+### Subtask
+
+| Operation      | What it does                              | Parameters                                   |
+| -------------- | ----------------------------------------- | -------------------------------------------- |
+| **Create**     | Add a subtask to a task                   | `Task`* · `Title`*                            |
+| **Update**     | Modify a subtask title                    | `Task`* · `Subtask`* · `Title`*               |
+| **Delete**     | Remove a subtask                          | `Task`* · `Subtask`*                          |
+| **Get Many**   | List the subtasks of a task               | `Task`* → the parent task with its subtasks   |
+| **Validate**   | Complete or un-complete a subtask         | `Task`* · `Subtask`* · `Completed`            |
+
+`*` required — leave it empty to auto-detect the item from the input data.
+
+### Statuses
+
+| Resource | Values                                                     | Default   |
+| -------- | ---------------------------------------------------------- | --------- |
+| Task     | `inbox` · `next` · `someday` · `waiting` · `completed`     | `inbox`   |
+| Project  | `active` · `archived` · `completed`                        | `active`  |
+| Subtask  | `needsAction` · `completed` *(managed by **Validate**)*    | automatic |
+
+### Good to know
+
+- **IDs and timestamps are automatic** — new entries get a unique `id` (`t_…`, `p_…`, `st_…`) plus `createdAt` / `updatedAt`; every mutation refreshes `updatedAt`.
+- **Deleting a project** removes it and clears `projectId` on the tasks that referenced it.
+- **One database per run** — the database is parsed once from the first input item and shared, so several chained operations in a single run see each other's changes.
+- **No credentials required** — the node only processes data already present in the workflow.
+
+---
 
 ## Compatibility
 
-- **n8n version**: v1.0.0 or higher
-- **Node API Version**: 1
-- **Strict Mode**: Enabled
+| Requirement        | Value                                          |
+| ------------------ | ---------------------------------------------- |
+| **n8n**           | v1.0.0 or higher                               |
+| **Node API**      | Version 1                                      |
+| **Strict mode**   | Enabled (n8n Cloud eligible)                   |
+| **Credentials**   | None                                           |
+| **Node version**  | 26.11.1                                        |
+| **Categories**    | Productivity, Development                      |
 
-## Resources
+---
 
-- [n8n community nodes documentation](https://docs.n8n.io/integrations/#community-nodes)
-- [GitHub Repository](https://github.com/TaiStudio/n8n-nodes-mindwtr-file)
-- [Issue Tracker](https://github.com/TaiStudio/n8n-nodes-mindwtr-file/issues)
+## Development
+
+Built with the official [`n8n-node`](https://docs.n8n.io/integrations/creating-nodes/build/) CLI.
+
+```bash
+git clone https://github.com/TaiStudio/n8n-nodes-mindwtr-file.git
+cd n8n-nodes-mindwtr-file
+npm install
+
+npm run dev        # n8n with hot reload on http://localhost:5678
+npm run build      # compile to dist/ for distribution
+npm run lint       # check code style (--fix to auto-fix)
+npm run release    # build, lint, changelog, tag & publish to npm
+```
+
+| Path                                   | Purpose                                    |
+| -------------------------------------- | ------------------------------------------ |
+| `nodes/Mindwtr/Mindwtr.node.ts`        | The node (resources, operations, execution) |
+| `nodes/Mindwtr/mindwtr.svg`            | Icon (light + dark variant)                 |
+| `data.json`                            | Sample Mindwtr database for local testing   |
+| `package.json` → `n8n`                 | Registered nodes & credentials              |
+| `CHANGELOG.md`                         | Release history                            |
+
+Please read [AGENTS.md](AGENTS.md) and `.agents/workflow.md` before contributing.
+
+---
+
+## Support & contributing
+
+- 🐛 **Bug reports & feature requests** → [open an issue](https://github.com/TaiStudio/n8n-nodes-mindwtr-file/issues)
+- 🔒 **Security** → see [SECURITY.md](SECURITY.md)
+- 📦 **Release notes** → [CHANGELOG.md](CHANGELOG.md)
+- 💖 **Support the project** → [GitHub Sponsors](https://github.com/sponsors/LeGitHubDeTai) · [Buy Me a Coffee](https://www.buymeacoffee.com/taistudio)
+
+---
 
 ## License
 
-[MIT License](LICENSE) © Tai Studio
+MIT © Tai Studio
